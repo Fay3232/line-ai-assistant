@@ -4,10 +4,10 @@ import { runTool } from "../tools.js";
 const GEMINI_ENDPOINT_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 const systemInstruction = `
-你是 LINE 裡的繁體中文 AI 助理，主要服務台灣使用者。
-你可以回答一般問題，也可以協助查詢台灣天氣、美食、台股與美股。
-回覆要短、清楚、適合手機閱讀。
-股票資訊只做查詢與摘要，不提供買賣建議。
+You are a Traditional Chinese LINE assistant for users in Taiwan.
+You can answer general questions and route requests to tools for Taiwan weather, food, Taiwan stocks, and US stocks.
+Keep replies short, clear, and mobile-friendly.
+Stock information is for lookup only and is not investment advice.
 `.trim();
 
 const intentSchema = {
@@ -16,7 +16,7 @@ const intentSchema = {
     toolName: {
       type: "string",
       enum: ["none", "get_weather", "search_food", "get_stock_quote"],
-      description: "要呼叫的工具；不需要工具時用 none"
+      description: "Tool to call. Use none when no tool is needed."
     },
     args: {
       type: "object",
@@ -32,7 +32,7 @@ const intentSchema = {
     },
     reply: {
       type: "string",
-      description: "若 toolName 是 none，直接提供繁體中文短回覆；否則留空字串"
+      description: "Traditional Chinese direct reply when toolName is none; otherwise an empty string."
     }
   },
   required: ["toolName", "args", "reply"],
@@ -51,20 +51,20 @@ export async function answerWithGemini({ text, location }) {
   }
 
   const toolResult = await runTool(intent.toolName, sanitizeToolArgs(intent), { location });
-  return summarizeToolResult({ userPrompt, toolName: intent.toolName, toolResult });
+  return formatToolResult(intent.toolName, toolResult);
 }
 
 async function detectIntent(userPrompt) {
   const prompt = `
-判斷使用者訊息是否需要呼叫工具。
+Classify this LINE message and return JSON only.
 
-工具規則：
-- 查天氣、下雨、氣溫、颱風：toolName=get_weather，args.city 填台灣縣市。
-- 查附近美食、餐廳、咖啡、拉麵、吃什麼、市場美食：toolName=search_food，args.query 填完整搜尋詞，例如「西湖市場美食」。
-- 查股票、股價、台股、美股、2330、AAPL 這類代號：toolName=get_stock_quote，台股 market=TW，美股 market=US。
-- 其他一般聊天或能力介紹：toolName=none，reply 直接用繁體中文回答。
+Rules:
+- Weather/rain/temperature/typhoon: toolName=get_weather, args.city should be a Taiwan city/county.
+- Food/restaurants/cafes/ramen/what to eat/market food: toolName=search_food, args.query should keep the full search term, for example "西湖市場美食".
+- Stocks/stock price/Taiwan stocks/US stocks/2330/AAPL-like symbols: toolName=get_stock_quote. Use market=TW for numeric Taiwan symbols, market=US for US tickers.
+- General chat or "what can you do": toolName=none and reply in Traditional Chinese.
 
-使用者訊息：
+User message:
 ${userPrompt}
 `.trim();
 
@@ -83,41 +83,6 @@ ${userPrompt}
     args: parsed.args && typeof parsed.args === "object" ? parsed.args : {},
     reply: typeof parsed.reply === "string" ? parsed.reply.trim() : ""
   };
-}
-
-async function summarizeToolResult({ userPrompt, toolName, toolResult }) {
-  if (toolResult?.needsConfiguration) {
-    return `此功能還缺 Render Environment 變數：${toolResult.needsConfiguration}。\n設定後請重新部署 Render。`;
-  }
-
-  if (toolResult?.providerError) {
-    return `我已連到 AI，但 ${toolResult.source} 資料源發生問題：\n${toolResult.message}`;
-  }
-
-  const prompt = `
-請根據使用者訊息與工具結果，用繁體中文回覆 LINE 使用者。
-
-要求：
-- 手機閱讀友善，短句，不要超過 5 行。
-- 如果工具結果 ok=false，直接說明查不到或需要補哪些資訊。
-- 如果是美食，列出最多 5 間，包含店名、評分、地址或 Google Maps 連結。
-- 如果是股票，提醒「僅供資訊查詢，不構成投資建議」。
-- 不要捏造工具結果沒有提供的數字。
-
-使用者訊息：
-${userPrompt}
-
-工具名稱：
-${toolName}
-
-工具結果 JSON：
-${JSON.stringify(toolResult)}
-`.trim();
-
-  return generateText({
-    prompt,
-    system: systemInstruction
-  });
 }
 
 async function generateText({ prompt, system, generationConfig = {} }) {
@@ -158,6 +123,91 @@ async function generateText({ prompt, system, generationConfig = {} }) {
     throw new Error("Gemini returned an empty response.");
   }
   return text;
+}
+
+function formatToolResult(toolName, result) {
+  if (result?.needsConfiguration) {
+    return `此功能還缺 Render Environment 變數：${result.needsConfiguration}\n設定後請重新部署 Render。`;
+  }
+
+  if (result?.providerError) {
+    return `我已連到 AI，但 ${result.source} 資料源發生問題：\n${result.message}`;
+  }
+
+  if (toolName === "get_weather") return formatWeather(result);
+  if (toolName === "search_food") return formatFood(result);
+  if (toolName === "get_stock_quote") return formatStock(result);
+  return result?.message || "查詢完成，但我暫時無法整理結果。";
+}
+
+function formatWeather(result) {
+  if (!result?.ok) {
+    return result?.message || "查不到這個地區的天氣資訊，請換成縣市名稱再試一次。";
+  }
+
+  const rows = [];
+  for (const element of result.forecast || []) {
+    const first = element.periods?.[0];
+    if (!first) continue;
+    rows.push(`${weatherElementLabel(element.name)}：${first.value}${first.unit || ""}`);
+  }
+
+  return [
+    `${result.city} 天氣：`,
+    ...rows.slice(0, 5),
+    `來源：${result.source}`
+  ].filter(Boolean).join("\n");
+}
+
+function formatFood(result) {
+  if (!result?.ok) {
+    return result?.message || "找不到符合條件的餐廳。";
+  }
+
+  const lines = (result.places || []).slice(0, 5).map((place, index) => {
+    const rating = place.rating ? `，評分 ${place.rating}` : "";
+    const address = place.address ? `\n${place.address}` : "";
+    const map = place.mapsUrl ? `\n${place.mapsUrl}` : "";
+    return `${index + 1}. ${place.name}${rating}${address}${map}`;
+  });
+
+  return [
+    "找到幾個美食選項：",
+    ...lines
+  ].join("\n\n");
+}
+
+function formatStock(result) {
+  if (!result?.ok) {
+    return result?.message || "查不到這個股票代號。";
+  }
+
+  if (result.market === "TW") {
+    return [
+      `${result.symbol} ${result.name || ""}`.trim(),
+      `收盤價：${result.price}`,
+      `漲跌：${result.change}`,
+      result.note
+    ].filter(Boolean).join("\n");
+  }
+
+  return [
+    `${result.symbol} 美股報價`,
+    `目前：${result.currentPrice}`,
+    `漲跌：${result.change} (${result.percentChange}%)`,
+    result.note
+  ].filter(Boolean).join("\n");
+}
+
+function weatherElementLabel(name) {
+  const labels = {
+    Wx: "天氣",
+    PoP: "降雨機率",
+    MinT: "最低溫",
+    MaxT: "最高溫",
+    CI: "體感"
+  };
+  return labels[name] || name;
 }
 
 function buildUserPrompt({ text, location }) {
