@@ -4,13 +4,13 @@ export const toolDefinitions = [
   {
     type: "function",
     name: "get_weather",
-    description: "查詢台灣縣市的天氣預報。適合回答會不會下雨、氣溫、天氣概況。",
+    description: "查詢台灣縣市天氣預報，適合回答會不會下雨、氣溫、天氣概況。",
     parameters: {
       type: "object",
       properties: {
         city: {
           type: "string",
-          description: "台灣縣市，例如台北市、高雄市、台中市"
+          description: "台灣縣市，例如臺北市、高雄市、臺中市"
         }
       },
       required: ["city"],

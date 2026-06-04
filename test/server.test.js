@@ -30,7 +30,7 @@ test("POST /simulate handles Chinese weather text", async () => {
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.ok, true);
-    assert.match(body.reply, /天氣查詢功能已準備好/);
+    assert.match(body.reply, /GEMINI_API_KEY/);
   } finally {
     await close(server.instance);
   }

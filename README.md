@@ -1,26 +1,18 @@
 # LINE AI Assistant
 
-這是一個最小可部署的 LINE AI 機器人範本，使用 LINE Messaging API webhook 接收訊息，透過 OpenAI Responses API 的 tool calling 判斷並呼叫外部資料源，支援：
+LINE 官方帳號 AI 機器人範本。Render 上的 Node.js webhook 接收 LINE Messaging API 事件，透過 AI provider 判斷使用者需求，再呼叫天氣、美食或股票工具回覆。
 
-- 台灣天氣查詢：中央氣象署 Open Data
-- 美食推薦：Google Places API
-- 股票查詢：台股 TWSE OpenAPI、美股 Finnhub
+目前支援：
+
+- AI provider：Gemini Free Tier，或 OpenAI Responses API
+- 天氣：中央氣象署 Open Data
+- 台股：TWSE OpenAPI
+- 美股：Finnhub
+- 美食：Google Places
 
 > 股票資訊僅供查詢與摘要，不構成投資建議。
 
-## 1. 準備帳號與 API Key
-
-1. 建立或使用既有 LINE Official Account。
-2. 到 LINE Developers 啟用 Messaging API，取得：
-   - `LINE_CHANNEL_SECRET`
-   - `LINE_CHANNEL_ACCESS_TOKEN`
-3. 建立 OpenAI API key，填入 `OPENAI_API_KEY`。
-4. 依功能填入資料源 key：
-   - 天氣：`CWA_API_KEY`
-   - 美食：`GOOGLE_PLACES_API_KEY`
-   - 美股：`FINNHUB_API_KEY`
-
-## 2. 本機設定
+## 1. 本機啟動
 
 複製環境變數範例：
 
@@ -28,20 +20,25 @@
 Copy-Item .env.example .env
 ```
 
-編輯 `.env`，至少先設定：
+編輯 `.env`，測試 Gemini 免費方案至少需要：
 
 ```env
+AI_PROVIDER=gemini
+GEMINI_API_KEY=你的_Gemini_API_Key
+GEMINI_MODEL=gemini-2.5-flash-lite
 ENABLE_SIMULATE_ROUTE=true
-OPENAI_API_KEY=你的_OpenAI_Key
-CWA_API_KEY=你的_中央氣象署_Key
-GOOGLE_PLACES_API_KEY=你的_Google_Places_Key
-FINNHUB_API_KEY=你的_Finnhub_Key
 ```
 
-啟動本機服務：
+啟動：
 
 ```powershell
-npm run dev
+npm.cmd run dev
+```
+
+如果 PowerShell 擋住 npm，改用：
+
+```powershell
+node --env-file=.env src/server.js
 ```
 
 健康檢查：
@@ -50,87 +47,136 @@ npm run dev
 Invoke-WebRequest -UseBasicParsing http://localhost:3000/health
 ```
 
-在尚未接 LINE 前，可用模擬路由測試：
+模擬 LINE 訊息：
 
 ```powershell
-Invoke-RestMethod `
-  -Method Post `
-  -Uri http://localhost:3000/simulate `
-  -ContentType 'application/json' `
-  -Body '{"text":"台北明天會下雨嗎？"}'
+$body = @{ text = "幫我查明天台北市的天氣" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://localhost:3000/simulate" -ContentType "application/json; charset=utf-8" -Body $body
 ```
 
-## 3. LINE Webhook 設定
+## 2. Render Environment
 
-部署到支援 Node.js 的平台後，把 LINE Developers Console 的 webhook URL 設成：
+`.env` 不要上傳 GitHub。正式部署請到 Render：
 
 ```text
-https://你的網域/webhook/line
+line-ai-assistant → Environment → Add Environment Variable
 ```
 
-正式環境請確認：
+Gemini 免費方案需要：
 
-```env
-ALLOW_UNSIGNED_WEBHOOKS=false
-ENABLE_SIMULATE_ROUTE=false
+```text
+AI_PROVIDER=gemini
+GEMINI_API_KEY=你的_Gemini_API_Key
+GEMINI_MODEL=gemini-2.5-flash-lite
 LINE_CHANNEL_SECRET=你的_LINE_Channel_Secret
 LINE_CHANNEL_ACCESS_TOKEN=你的_LINE_Channel_Access_Token
+ALLOW_UNSIGNED_WEBHOOKS=false
+ENABLE_SIMULATE_ROUTE=false
 ```
 
-如果 webhook 只跑在本機，電腦關機後 AI 查詢就不會執行；LINE 官方帳號仍存在，但只剩後台固定回覆、歡迎訊息、Rich Menu 等不依賴 webhook 的功能。正式使用請部署到雲端 HTTPS 服務，例如 Render、Railway、Cloud Run 或 Vercel。
-
-### 用 ngrok 做本機 LINE 測試
-
-如果 PowerShell 顯示 `ngrok` 無法辨識，代表 Windows 尚未安裝 ngrok，或安裝後尚未重新開啟終端機。
-
-安裝 ngrok：
-
-```powershell
-winget install -e --id Ngrok.Ngrok
-```
-
-安裝完成後，關掉 PowerShell 再重新打開，確認可執行：
-
-```powershell
-ngrok version
-```
-
-第一次使用需要到 ngrok 註冊並複製 authtoken，然後執行：
-
-```powershell
-ngrok config add-authtoken "你的_ngrok_authtoken"
-```
-
-確認本機 server 已在 `http://localhost:3000` 執行後，開另一個 PowerShell：
-
-```powershell
-ngrok http 3000
-```
-
-把 ngrok 顯示的 `https://...ngrok-free.app` 網址加上 `/webhook/line`，填到 LINE Developers Console：
+天氣功能需要：
 
 ```text
-https://你的-ngrok網址.ngrok-free.app/webhook/line
+CWA_API_KEY=你的_中央氣象署_API_Key
 ```
 
-## 4. 常用測試句
+其他功能可再補：
 
-- `台北明天會下雨嗎？`
-- `附近牛肉麵`
-- `台北車站拉麵`
-- `2330 股價`
-- `AAPL 股價`
+```text
+GOOGLE_PLACES_API_KEY=你的_Google_Places_Key
+FINNHUB_API_KEY=你的_Finnhub_Key
+```
 
-## 5. 驗證
+填完 Render Environment 後一定要重新部署：
+
+```text
+Manual Deploy → Deploy latest commit
+```
+
+如果改了 key 但沒有重新部署，正在跑的 Render container 仍會讀到舊環境變數。
+
+## 3. Render Build 設定
+
+Render Web Service 設定：
+
+```text
+Runtime: Node
+Build Command: npm install
+Start Command: npm start
+Root Directory: package.json 所在資料夾
+```
+
+Render 會自動提供 `PORT`，不用手動設定。
+
+部署成功後測：
+
+```text
+https://你的-render網址.onrender.com/health
+```
+
+預期：
+
+```json
+{"ok":true}
+```
+
+## 4. LINE Webhook
+
+到 LINE Developers Console：
+
+```text
+Provider → Messaging API Channel → Messaging API
+```
+
+Webhook URL 設為：
+
+```text
+https://你的-render網址.onrender.com/webhook/line
+```
+
+並開啟：
+
+```text
+Use webhook
+```
+
+到 LINE Official Account Manager 的回應設定，建議關閉會搶回覆的固定訊息：
+
+```text
+回應訊息：關閉
+AI 自動回應訊息：關閉
+Webhook：開啟
+```
+
+歡迎訊息可以保留。
+
+## 5. 常用測試句
+
+```text
+幫我查明天台北市的天氣
+2330 股價
+AAPL 股價
+你可以做什麼？
+附近牛肉麵
+```
+
+## 6. 驗證
 
 ```powershell
-npm run check
-npm test
+npm.cmd run check
+npm.cmd test
 ```
 
-## 6. 下一步
+或不用 npm：
 
-- 加入資料庫保存使用者最近一次位置，讓「附近美食」不用每次重新分享位置。
-- 加入 Rich Menu：天氣、美食、股票、分享位置。
-- 加入背景佇列，避免較慢的 API 查詢影響 LINE webhook 回應時間。
-- 加入部署設定，例如 Render、Railway、Cloud Run 或 Vercel serverless adapter。
+```powershell
+node --check src/server.js
+node --test
+```
+
+## 7. 注意事項
+
+- Render Free 方案閒置會休眠，第一則 LINE 訊息可能延遲或 timeout。
+- Gemini Free Tier 可用量與模型支援會依 Google 規則調整；免費層資料可能被用於改善產品。
+- Google Places 通常需要 Google Cloud billing；初期可先測天氣與股票。
+- `.env.example` 只能放 placeholder，不要放真實 API key。

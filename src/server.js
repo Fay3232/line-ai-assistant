@@ -1,7 +1,7 @@
 import http from "node:http";
 import { pathToFileURL } from "node:url";
 import { config } from "./config.js";
-import { answerUserMessage } from "./openai.js";
+import { answerUserMessage } from "./ai.js";
 import {
   getEventLocation,
   getEventText,

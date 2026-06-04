@@ -16,6 +16,7 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || "development",
   allowUnsignedWebhooks: readBoolean("ALLOW_UNSIGNED_WEBHOOKS", false),
   enableSimulateRoute: readBoolean("ENABLE_SIMULATE_ROUTE", false),
+  aiProvider: (process.env.AI_PROVIDER || "gemini").toLowerCase(),
   line: {
     channelSecret: process.env.LINE_CHANNEL_SECRET || "",
     channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || ""
@@ -23,6 +24,10 @@ export const config = {
   openai: {
     apiKey: process.env.OPENAI_API_KEY || "",
     model: process.env.OPENAI_MODEL || "chat-latest"
+  },
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY || "",
+    model: process.env.GEMINI_MODEL || "gemini-2.5-flash-lite"
   },
   providers: {
     cwaApiKey: process.env.CWA_API_KEY || "",
@@ -33,4 +38,8 @@ export const config = {
 
 export function hasOpenAI() {
   return Boolean(config.openai.apiKey);
+}
+
+export function hasGemini() {
+  return Boolean(config.gemini.apiKey);
 }
