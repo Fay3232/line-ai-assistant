@@ -60,7 +60,7 @@ async function detectIntent(userPrompt) {
 
 工具規則：
 - 查天氣、下雨、氣溫、颱風：toolName=get_weather，args.city 填台灣縣市。
-- 查附近美食、餐廳、咖啡、拉麵、吃什麼：toolName=search_food，args.query 填料理/餐廳關鍵字，若有地區填 args.city。
+- 查附近美食、餐廳、咖啡、拉麵、吃什麼、市場美食：toolName=search_food，args.query 填完整搜尋詞，例如「西湖市場美食」。
 - 查股票、股價、台股、美股、2330、AAPL 這類代號：toolName=get_stock_quote，台股 market=TW，美股 market=US。
 - 其他一般聊天或能力介紹：toolName=none，reply 直接用繁體中文回答。
 
@@ -86,12 +86,21 @@ ${userPrompt}
 }
 
 async function summarizeToolResult({ userPrompt, toolName, toolResult }) {
+  if (toolResult?.needsConfiguration) {
+    return `此功能還缺 Render Environment 變數：${toolResult.needsConfiguration}。\n設定後請重新部署 Render。`;
+  }
+
+  if (toolResult?.providerError) {
+    return `我已連到 AI，但 ${toolResult.source} 資料源發生問題：\n${toolResult.message}`;
+  }
+
   const prompt = `
 請根據使用者訊息與工具結果，用繁體中文回覆 LINE 使用者。
 
 要求：
 - 手機閱讀友善，短句，不要超過 5 行。
-- 如果工具結果 needsConfiguration，明確說缺少哪個 Render Environment 變數。
+- 如果工具結果 ok=false，直接說明查不到或需要補哪些資訊。
+- 如果是美食，列出最多 5 間，包含店名、評分、地址或 Google Maps 連結。
 - 如果是股票，提醒「僅供資訊查詢，不構成投資建議」。
 - 不要捏造工具結果沒有提供的數字。
 

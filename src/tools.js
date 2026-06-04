@@ -26,11 +26,11 @@ export const toolDefinitions = [
       properties: {
         query: {
           type: "string",
-          description: "餐廳或料理關鍵字，例如牛肉麵、咖啡、拉麵"
+          description: "餐廳或料理關鍵字，例如西湖市場美食、牛肉麵、咖啡、拉麵"
         },
         city: {
           type: "string",
-          description: "城市或區域，例如台北車站、信義區"
+          description: "城市或區域，例如台北車站、信義區、西湖市場"
         },
         latitude: {
           type: "number",
@@ -73,18 +73,28 @@ export const toolDefinitions = [
 ];
 
 export async function runTool(name, args, context = {}) {
-  switch (name) {
-    case "get_weather":
-      return getWeather(args);
-    case "search_food":
-      return searchFood({ ...args, ...locationFallback(args, context.location) });
-    case "get_stock_quote":
-      return getStockQuote(args);
-    default:
-      return {
-        ok: false,
-        error: `Unknown tool: ${name}`
-      };
+  try {
+    switch (name) {
+      case "get_weather":
+        return getWeather(args);
+      case "search_food":
+        return searchFood({ ...args, ...locationFallback(args, context.location) });
+      case "get_stock_quote":
+        return getStockQuote(args);
+      default:
+        return {
+          ok: false,
+          error: `Unknown tool: ${name}`
+        };
+    }
+  } catch (error) {
+    console.error(error);
+    return {
+      ok: false,
+      providerError: true,
+      source: inferToolSource(name),
+      message: normalizeProviderError(error)
+    };
   }
 }
 
@@ -110,6 +120,7 @@ export async function getWeather({ city }) {
     ok: Boolean(location),
     source: "CWA F-C0032-001",
     city: normalizedCity,
+    message: location ? "" : `查不到 ${normalizedCity} 的天氣資訊。`,
     forecast: elements.map((element) => ({
       name: element.elementName,
       periods: (element.time || []).slice(0, 3).map((period) => ({
@@ -132,11 +143,21 @@ export async function searchFood({ query, city, latitude, longitude, openNow = f
   }
 
   if (isFiniteNumber(latitude) && isFiniteNumber(longitude)) {
-    return searchFoodNearby({ query, latitude, longitude, openNow });
+    return searchFoodByText({
+      textQuery: `${query} 餐廳`,
+      latitude,
+      longitude,
+      openNow,
+      source: "Google Places Text Search with locationBias"
+    });
   }
 
-  const textQuery = [city, query].filter(Boolean).join(" ") || query;
-  return searchFoodByText({ textQuery, openNow });
+  const textQuery = [city, query, "餐廳"].filter(Boolean).join(" ");
+  return searchFoodByText({
+    textQuery,
+    openNow,
+    source: "Google Places Text Search"
+  });
 }
 
 export async function getStockQuote({ market, symbol }) {
@@ -155,34 +176,25 @@ export async function getStockQuote({ market, symbol }) {
   return getUsStockQuote(cleanSymbol);
 }
 
-async function searchFoodNearby({ query, latitude, longitude, openNow }) {
-  const response = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": config.providers.googlePlacesApiKey,
-      "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.googleMapsUri,places.currentOpeningHours"
-    },
-    body: JSON.stringify({
-      includedTypes: ["restaurant"],
-      rankPreference: "DISTANCE",
-      maxResultCount: 5,
-      languageCode: "zh-TW",
-      locationRestriction: {
-        circle: {
-          center: { latitude, longitude },
-          radius: 1500
-        }
-      },
-      keyword: query,
-      openNow
-    })
-  });
+async function searchFoodByText({ textQuery, latitude, longitude, openNow, source }) {
+  const body = {
+    textQuery,
+    languageCode: "zh-TW",
+    regionCode: "TW",
+    includedType: "restaurant",
+    maxResultCount: 5,
+    openNow
+  };
 
-  return normalizePlacesResponse(await readJsonResponse(response), "Google Places Nearby Search");
-}
+  if (isFiniteNumber(latitude) && isFiniteNumber(longitude)) {
+    body.locationBias = {
+      circle: {
+        center: { latitude, longitude },
+        radius: 1500
+      }
+    };
+  }
 
-async function searchFoodByText({ textQuery, openNow }) {
   const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
     method: "POST",
     headers: {
@@ -190,15 +202,10 @@ async function searchFoodByText({ textQuery, openNow }) {
       "X-Goog-Api-Key": config.providers.googlePlacesApiKey,
       "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.googleMapsUri,places.currentOpeningHours"
     },
-    body: JSON.stringify({
-      textQuery: `${textQuery} 餐廳`,
-      languageCode: "zh-TW",
-      maxResultCount: 5,
-      openNow
-    })
+    body: JSON.stringify(body)
   });
 
-  return normalizePlacesResponse(await readJsonResponse(response), "Google Places Text Search");
+  return normalizePlacesResponse(await readJsonResponse(response), source);
 }
 
 async function getTaiwanStockQuote(symbol) {
@@ -357,6 +364,33 @@ async function readJsonResponse(response) {
     throw new Error(`Provider request failed: ${response.status} ${text}`);
   }
   return text ? JSON.parse(text) : {};
+}
+
+function normalizeProviderError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("API key not valid") || message.includes("REQUEST_DENIED")) {
+    return "Google Places API key 無效，或尚未啟用 Places API。";
+  }
+  if (message.includes("BillingNotEnabledMapError") || message.includes("billing")) {
+    return "Google Places 需要啟用 Google Cloud billing。";
+  }
+  if (message.includes("PERMISSION_DENIED")) {
+    return "Google Cloud 專案尚未授權使用 Places API，請確認 API key 限制與 Places API 是否啟用。";
+  }
+  return message.slice(0, 600);
+}
+
+function inferToolSource(name) {
+  switch (name) {
+    case "get_weather":
+      return "CWA";
+    case "search_food":
+      return "Google Places";
+    case "get_stock_quote":
+      return "Stock provider";
+    default:
+      return "Unknown provider";
+  }
 }
 
 function isFiniteNumber(value) {
