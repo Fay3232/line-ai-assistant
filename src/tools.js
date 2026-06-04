@@ -377,6 +377,9 @@ function normalizeProviderError(error) {
   if (message.includes("PERMISSION_DENIED")) {
     return "Google Cloud 專案尚未授權使用 Places API，請確認 API key 限制與 Places API 是否啟用。";
   }
+  if (message.includes("Provider request failed: 403")) {
+    return "Google Places 回傳 403。請確認 Google Cloud billing 已啟用、Places API / Places API (New) 已啟用，且 API key 沒有設成只能給瀏覽器網域或特定 IP 使用。";
+  }
   return message.slice(0, 600);
 }
 

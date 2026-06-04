@@ -40,8 +40,9 @@ const intentSchema = {
 };
 
 export async function answerWithGemini({ text, location }) {
+  const localIntent = detectLocalIntent({ text, location });
   const userPrompt = buildUserPrompt({ text, location });
-  const intent = await detectIntent(userPrompt);
+  const intent = localIntent || await detectIntent(userPrompt);
 
   if (intent.toolName === "none") {
     return intent.reply || await generateText({
@@ -125,6 +126,51 @@ async function generateText({ prompt, system, generationConfig = {} }) {
   return text;
 }
 
+function detectLocalIntent({ text, location }) {
+  const message = String(text || "").trim();
+  const upper = message.toUpperCase();
+
+  if (/你可以做什麼|你會什麼|功能|HELP|幫助/.test(upper)) {
+    return {
+      toolName: "none",
+      args: {},
+      reply: "我可以幫你查台灣天氣、美食餐廳、台股和美股。\n例如：\n台北明天天氣\n西湖市場美食\n2330 股價"
+    };
+  }
+
+  const stock = extractStock(message, upper);
+  if (stock) {
+    return {
+      toolName: "get_stock_quote",
+      args: stock,
+      reply: ""
+    };
+  }
+
+  if (/天氣|下雨|降雨|氣溫|溫度|颱風|天候/.test(message)) {
+    return {
+      toolName: "get_weather",
+      args: {
+        city: extractTaiwanCity(message) || "臺北市"
+      },
+      reply: ""
+    };
+  }
+
+  if (isFoodMessage(message, location)) {
+    return {
+      toolName: "search_food",
+      args: {
+        query: cleanFoodQuery(message),
+        openNow: /現在|營業|開著|open/i.test(message)
+      },
+      reply: ""
+    };
+  }
+
+  return null;
+}
+
 function formatToolResult(toolName, result) {
   if (result?.needsConfiguration) {
     return `此功能還缺 Render Environment 變數：${result.needsConfiguration}\n設定後請重新部署 Render。`;
@@ -197,6 +243,46 @@ function formatStock(result) {
     `漲跌：${result.change} (${result.percentChange}%)`,
     result.note
   ].filter(Boolean).join("\n");
+}
+
+function extractStock(message, upper) {
+  const hasStockWord = /股票|股價|台股|美股|報價/.test(message);
+  const twSymbol = message.match(/\b[0-9]{4,6}\b/);
+  if (twSymbol && hasStockWord) {
+    return { market: "TW", symbol: twSymbol[0] };
+  }
+
+  const usSymbol = upper.match(/\b[A-Z]{1,5}\b/);
+  if (usSymbol && hasStockWord) {
+    return { market: "US", symbol: usSymbol[0] };
+  }
+
+  return null;
+}
+
+function extractTaiwanCity(message) {
+  const cities = [
+    "台北市", "臺北市", "新北市", "桃園市", "台中市", "臺中市", "台南市", "臺南市",
+    "高雄市", "基隆市", "新竹市", "嘉義市", "新竹縣", "苗栗縣", "彰化縣", "南投縣",
+    "雲林縣", "嘉義縣", "屏東縣", "宜蘭縣", "花蓮縣", "台東縣", "臺東縣", "澎湖縣",
+    "金門縣", "連江縣", "台北", "臺北", "新北", "桃園", "台中", "臺中", "台南",
+    "臺南", "高雄", "基隆", "新竹", "嘉義", "苗栗", "彰化", "南投", "雲林",
+    "屏東", "宜蘭", "花蓮", "台東", "臺東", "澎湖", "金門", "連江"
+  ];
+  return cities.find((city) => message.includes(city)) || "";
+}
+
+function isFoodMessage(message, location) {
+  if (/美食|餐廳|吃什麼|小吃|市場|咖啡|拉麵|牛肉麵|火鍋|早餐|午餐|晚餐|宵夜|推薦.*吃/.test(message)) {
+    return true;
+  }
+  return Boolean(location && /附近|周邊|附近有什麼/.test(message));
+}
+
+function cleanFoodQuery(message) {
+  return String(message || "")
+    .replace(/幫我|請問|推薦|有哪些|有什麼|查一下|找一下/g, "")
+    .trim() || "餐廳";
 }
 
 function weatherElementLabel(name) {
