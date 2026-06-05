@@ -48,27 +48,6 @@ export const toolDefinitions = [
       required: ["query"],
       additionalProperties: false
     }
-  },
-  {
-    type: "function",
-    name: "get_stock_quote",
-    description: "查詢台股或美股報價摘要。僅提供資訊查詢，不提供投資建議。",
-    parameters: {
-      type: "object",
-      properties: {
-        market: {
-          type: "string",
-          enum: ["TW", "US"],
-          description: "TW 代表台股，US 代表美股"
-        },
-        symbol: {
-          type: "string",
-          description: "股票代號，例如 2330 或 AAPL"
-        }
-      },
-      required: ["market", "symbol"],
-      additionalProperties: false
-    }
   }
 ];
 
@@ -79,8 +58,6 @@ export async function runTool(name, args, context = {}) {
         return getWeather(args);
       case "search_food":
         return searchFood({ ...args, ...locationFallback(args, context.location) });
-      case "get_stock_quote":
-        return getStockQuote(args);
       default:
         return {
           ok: false,
@@ -145,22 +122,6 @@ export async function searchFood({ query, city, latitude, longitude, openNow = f
   });
 }
 
-export async function getStockQuote({ market, symbol }) {
-  const cleanSymbol = String(symbol || "").trim().toUpperCase();
-  if (!cleanSymbol) {
-    return {
-      ok: false,
-      message: "請提供股票代號，例如 2330 或 AAPL。"
-    };
-  }
-
-  if (market === "TW") {
-    return getTaiwanStockQuote(cleanSymbol);
-  }
-
-  return getUsStockQuote(cleanSymbol);
-}
-
 async function getTownshipWeather(location) {
   const url = new URL("https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-089");
   url.searchParams.set("Authorization", config.providers.cwaApiKey);
@@ -221,7 +182,7 @@ async function searchFoodByText({ textQuery, latitude, longitude, openNow, sourc
     languageCode: "zh-TW",
     regionCode: "TW",
     includedType: "restaurant",
-    maxResultCount: 5,
+    maxResultCount: 20,
     openNow
   };
 
@@ -245,68 +206,6 @@ async function searchFoodByText({ textQuery, latitude, longitude, openNow, sourc
   });
 
   return normalizePlacesResponse(await readJsonResponse(response), source);
-}
-
-async function getTaiwanStockQuote(symbol) {
-  const code = symbol.replace(".TW", "");
-  const data = await fetchJson("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL");
-  const item = Array.isArray(data)
-    ? data.find((row) => row.Code === code || row["證券代號"] === code)
-    : null;
-
-  if (!item) {
-    return {
-      ok: false,
-      market: "TW",
-      symbol: code,
-      message: "找不到此台股代號，或公開資料尚未更新。"
-    };
-  }
-
-  return {
-    ok: true,
-    market: "TW",
-    symbol: code,
-    name: item.Name || item["證券名稱"] || "",
-    price: item.ClosingPrice || item["收盤價"] || "",
-    change: item.Change || item["漲跌價差"] || "",
-    volume: item.TradeVolume || item["成交股數"] || "",
-    source: "TWSE OpenAPI STOCK_DAY_ALL",
-    note: "台股資料以證交所公開資料為準，可能不是即時盤中報價。"
-  };
-}
-
-async function getUsStockQuote(symbol) {
-  if (!config.providers.finnhubApiKey) {
-    return {
-      ok: false,
-      needsConfiguration: "FINNHUB_API_KEY",
-      market: "US",
-      symbol,
-      message: "尚未設定 Finnhub API key。設定後可查詢美股報價摘要。"
-    };
-  }
-
-  const url = new URL("https://finnhub.io/api/v1/quote");
-  url.searchParams.set("symbol", symbol);
-  url.searchParams.set("token", config.providers.finnhubApiKey);
-  const quote = await fetchJson(url);
-
-  return {
-    ok: Boolean(quote && quote.c),
-    market: "US",
-    symbol,
-    currentPrice: quote.c,
-    change: quote.d,
-    percentChange: quote.dp,
-    high: quote.h,
-    low: quote.l,
-    open: quote.o,
-    previousClose: quote.pc,
-    timestamp: quote.t,
-    source: "Finnhub quote",
-    note: "僅供資訊查詢，不構成投資建議。"
-  };
 }
 
 function findTownshipLocation(data, locality) {
@@ -356,20 +255,27 @@ function extractElementUnit(value) {
 }
 
 function normalizePlacesResponse(data, source) {
-  const places = (data.places || []).slice(0, 5).map((place) => ({
+  const candidates = (data.places || []).map((place) => ({
     name: place.displayName?.text || "",
     address: place.formattedAddress || "",
     rating: place.rating || null,
     mapsUrl: place.googleMapsUri || "",
     openNow: place.currentOpeningHours?.openNow
   }));
+  const place = pickRandom(candidates);
 
   return {
-    ok: places.length > 0,
+    ok: Boolean(place),
     source,
-    places,
-    message: places.length ? "" : "找不到符合條件的餐廳。"
+    places: place ? [place] : [],
+    candidateCount: candidates.length,
+    message: place ? "" : "找不到符合條件的餐廳。"
   };
+}
+
+function pickRandom(items) {
+  if (!items.length) return null;
+  return items[Math.floor(Math.random() * items.length)];
 }
 
 function locationFallback(args, location) {
@@ -453,8 +359,6 @@ function inferToolSource(name) {
       return "CWA";
     case "search_food":
       return "Google Places";
-    case "get_stock_quote":
-      return "Stock provider";
     default:
       return "Unknown provider";
   }

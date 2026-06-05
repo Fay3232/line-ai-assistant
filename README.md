@@ -1,16 +1,15 @@
 # LINE AI Assistant
 
-LINE 官方帳號 AI 機器人範本。Render 上的 Node.js webhook 接收 LINE Messaging API 事件，全部先交給 Gemini 判斷與回覆；當 Gemini 判斷需要即時資料時，再呼叫天氣、美食或股票工具。
+LINE 官方帳號 AI 機器人範本。Render 上的 Node.js webhook 接收 LINE Messaging API 事件，全部先交給 Gemini 判斷與回覆；當 Gemini 判斷需要即時資料時，再呼叫天氣或美食工具。
 
 目前支援：
 
 - Gemini 一般問答：聊天、文案、翻譯、摘要、規劃、知識問答
 - 天氣：中央氣象署 Open Data
-- 台股：TWSE OpenAPI
-- 美股：Finnhub
-- 美食：Google Places
+- 股票：直接由 Gemini 回答，不再使用 TWSE 或 Finnhub API
+- 美食：Google Places 隨機推薦 1 家
 
-> 股票資訊僅供查詢與摘要，不構成投資建議。
+> 股票資訊由 Gemini 產生，可能不是即時報價，僅供參考，不構成投資建議。
 
 ## 1. 本機啟動
 
@@ -79,7 +78,6 @@ ENABLE_SIMULATE_ROUTE=false
 ```text
 CWA_API_KEY=你的_中央氣象署_API_Key
 GOOGLE_PLACES_API_KEY=你的_Google_Places_Key
-FINNHUB_API_KEY=你的_Finnhub_Key
 ```
 
 填完 Render Environment 後一定要重新部署：

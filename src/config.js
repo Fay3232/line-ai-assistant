@@ -32,8 +32,7 @@ export const config = {
   },
   providers: {
     cwaApiKey: process.env.CWA_API_KEY || "",
-    googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY || "",
-    finnhubApiKey: process.env.FINNHUB_API_KEY || ""
+    googlePlacesApiKey: process.env.GOOGLE_PLACES_API_KEY || ""
   }
 };
 

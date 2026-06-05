@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "LINE Messaging API webhook with OpenAI tool calling for food, stocks, and weather.",
+  "description": "LINE Messaging API webhook with Gemini answers plus food and weather tools.",
   "engines": {
     "node": ">=20"
   },

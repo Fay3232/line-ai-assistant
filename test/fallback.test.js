@@ -30,6 +30,24 @@ test("Gemini provider sends general questions directly to Gemini answer mode", a
   }
 });
 
+test("Gemini provider sends stock questions directly to Gemini without tool lookup", async () => {
+  const calls = mockGemini([
+    "2330 的股價資訊可能不是即時報價，建議再確認券商或交易所資料。僅供資訊參考，不構成投資建議。"
+  ]);
+
+  try {
+    const reply = await answerWithGemini({ text: "2330 股價" });
+
+    assert.match(reply, /2330/);
+    assert.match(reply, /不構成投資建議/);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].contents[0].parts[0].text, /Answer this LINE user message directly/);
+    assert.doesNotMatch(calls[0].contents[0].parts[0].text, /Classify this LINE message/);
+  } finally {
+    calls.restore();
+  }
+});
+
 test("Gemini provider lets Gemini route weather before tool lookup", async () => {
   const calls = mockGemini([
     {
@@ -45,6 +63,8 @@ test("Gemini provider lets Gemini route weather before tool lookup", async () =>
 
     assert.match(reply, /CWA_API_KEY/);
     assert.equal(calls.length, 2);
+    assert.match(calls[1].contents[0].parts[0].text, /Format for a LINE chat bubble/);
+    assert.match(calls[1].contents[0].parts[0].text, /• /);
   } finally {
     calls.restore();
   }

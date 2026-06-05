@@ -33,7 +33,7 @@ export function heuristicReply({ text, location }) {
   }
 
   if (/\b[A-Z]{1,5}\b|[0-9]{4}|股票|股價|台股|美股/.test(message.toUpperCase())) {
-    return "股票查詢已準備好；台股使用 TWSE OpenAPI，美股需要 FINNHUB_API_KEY。資訊只供查詢，不構成投資建議。";
+    return "股票問題會直接交給 Gemini 回答，不再使用 TWSE 或 Finnhub API。資訊僅供參考，不構成投資建議。";
   }
 
   return "LINE AI 助理已啟動。你可以問我天氣、美食或股票，例如：「台北明天會下雨嗎？」、「附近牛肉麵」、「2330 股價」。";

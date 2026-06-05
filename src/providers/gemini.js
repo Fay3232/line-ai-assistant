@@ -6,10 +6,11 @@ const GEMINI_ENDPOINT_BASE = "https://generativelanguage.googleapis.com/v1beta/m
 const systemInstruction = `
 You are a Traditional Chinese LINE assistant for users in Taiwan.
 You can answer general questions directly.
-For current Taiwan weather, food/restaurant recommendations, Taiwan stocks, and US stocks, choose the appropriate tool first, then summarize the tool result.
+For current Taiwan weather and food/restaurant recommendations, choose the appropriate tool first, then summarize the tool result.
+For stock questions, answer directly with Gemini. Do not claim you have guaranteed realtime quotes; mention uncertainty when the user asks for current prices.
 Keep replies short, clear, and mobile-friendly.
-Do not fabricate current weather, restaurant details, or stock prices when a tool result is unavailable.
-Stock information is for lookup only and is not investment advice.
+Do not fabricate current weather or restaurant details when a tool result is unavailable.
+Stock information is for reference only and is not investment advice.
 `.trim();
 
 const intentSchema = {
@@ -17,7 +18,7 @@ const intentSchema = {
   properties: {
     toolName: {
       type: "string",
-      enum: ["none", "get_weather", "search_food", "get_stock_quote"],
+      enum: ["none", "get_weather", "search_food"],
       description: "Tool to call. Use none only when no current external data is needed."
     },
     args: {
@@ -25,8 +26,6 @@ const intentSchema = {
       properties: {
         city: { type: "string" },
         query: { type: "string" },
-        market: { type: "string", enum: ["TW", "US"] },
-        symbol: { type: "string" },
         latitude: { type: "number" },
         longitude: { type: "number" },
         openNow: { type: "boolean" }
@@ -77,7 +76,7 @@ Rules:
 - Current weather/rain/temperature/typhoon: toolName=get_weather, args.city should be a Taiwan city/county.
 - If the user asks about 淡水 weather, set args.city to 淡水區, not 臺北市.
 - Food/restaurants/cafes/ramen/what to eat/market food: toolName=search_food, args.query should keep the full search term, for example "西湖市場美食".
-- Stocks/stock price/Taiwan stocks/US stocks/2330/AAPL-like symbols: toolName=get_stock_quote. Use market=TW for numeric Taiwan symbols, market=US for US tickers.
+- Stocks/stock price/Taiwan stocks/US stocks/2330/AAPL-like symbols: toolName=none. Gemini will answer directly without a backend stock API.
 - General chat, entertainment recommendations, writing, translation, planning, summarization, or "what can you do": toolName=none. Do not answer here; set reply to an empty string.
 
 User message:
@@ -106,13 +105,21 @@ async function summarizeToolResult({ userPrompt, toolName, toolArgs, toolResult 
 Reply to the LINE user in Traditional Chinese using the user message and tool result.
 
 Requirements:
+- Format for a LINE chat bubble. Use short lines, blank lines between sections, and no markdown tables.
+- Use this structure when possible:
+  1. First line: concise title, for example "淡水區明天天氣"
+  2. Blank line
+  3. 3 to 5 bullet lines starting with "• "
+  4. Blank line
+  5. "資料來源：..."
 - Keep it mobile-friendly and concise.
 - If needsConfiguration is present, clearly name the missing Render Environment variable and say Render must be redeployed after setting it.
 - If providerError is present, explain the data source problem without exposing long raw JSON.
 - If ok=false, explain what was not found or what input is missing.
-- For food, list up to 5 places with name, rating, address, and Google Maps link when available.
-- For stocks, include the source caveat and say this is not investment advice.
+- For weather, group the key conditions into bullets. Mention the requested location first.
+- For food, recommend the single place returned by the tool. Include rating and map link when available.
 - Do not invent values that are not in the tool result.
+- Avoid long paragraphs.
 
 User message:
 ${userPrompt}
@@ -127,10 +134,11 @@ Tool result:
 ${JSON.stringify(toolResult)}
 `.trim();
 
-  return generateText({
+  const text = await generateText({
     prompt,
     system: systemInstruction
   });
+  return formatLineReply(text);
 }
 
 async function generateText({ prompt, system, generationConfig = {} }) {
@@ -173,6 +181,17 @@ async function generateText({ prompt, system, generationConfig = {} }) {
   return text;
 }
 
+function formatLineReply(text) {
+  return String(text || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+}
+
 function buildUserPrompt({ text, location }) {
   const parts = [String(text || "").trim()];
   if (location) {
@@ -189,7 +208,8 @@ Requirements:
 - Actually answer the request; do not only introduce your capabilities.
 - Keep it concise and useful for mobile chat.
 - If the user asks for recommendations, give concrete options.
-- If the user asks about current weather, restaurants, or stock prices, say you need the realtime tool instead of inventing data.
+- If the user asks about current weather or restaurants, say you need the realtime tool instead of inventing data.
+- If the user asks about stocks or stock prices, answer directly with Gemini. Be clear that prices may not be realtime, avoid fabricating exact live quotes, and include "僅供資訊參考，不構成投資建議。"
 
 User message:
 ${userPrompt}
@@ -199,7 +219,7 @@ ${userPrompt}
 function mayNeedRealtimeTool(text, location) {
   const message = String(text || "");
   if (location) return true;
-  return /天氣|下雨|降雨|氣溫|溫度|颱風|天候|美食|餐廳|吃什麼|小吃|市場|咖啡|拉麵|牛肉麵|火鍋|早餐|午餐|晚餐|宵夜|股票|股價|台股|美股|報價|\b[0-9]{4,6}\b|\b[A-Z]{1,5}\b/i.test(message);
+  return /天氣|下雨|降雨|氣溫|溫度|颱風|天候|美食|餐廳|吃什麼|小吃|市場|咖啡|拉麵|牛肉麵|火鍋|早餐|午餐|晚餐|宵夜/i.test(message);
 }
 
 function sanitizeToolArgs(intent, userText = "") {
@@ -216,23 +236,12 @@ function sanitizeToolArgs(intent, userText = "") {
       openNow: Boolean(args.openNow)
     };
   }
-  if (intent.toolName === "get_stock_quote") {
-    const symbol = String(args.symbol || "").trim().toUpperCase();
-    return {
-      market: args.market === "US" ? "US" : inferMarket(symbol),
-      symbol
-    };
-  }
   return {};
 }
 
 function normalizeToolName(toolName) {
-  const allowed = new Set(["none", "get_weather", "search_food", "get_stock_quote"]);
+  const allowed = new Set(["none", "get_weather", "search_food"]);
   return allowed.has(toolName) ? toolName : "none";
-}
-
-function inferMarket(symbol) {
-  return /^[0-9]{4,6}$/.test(symbol) ? "TW" : "US";
 }
 
 function parseJson(text) {
