@@ -5,7 +5,7 @@ LINE 官方帳號 AI 機器人範本。Render 上的 Node.js webhook 接收 LINE
 目前支援：
 
 - Gemini 一般問答：聊天、文案、翻譯、摘要、規劃、知識問答
-- 天氣：中央氣象署 Open Data
+- 天氣：中央氣象署 Open Data，固定顯示時段、天氣、降雨機率、氣溫、舒適度
 - 股票：Gemini 回答；可選擇啟用 Google Search grounding，不再使用 TWSE 或 Finnhub API
 - 美食：Google Places 隨機推薦 1 家，固定顯示地址、Google Maps、訂位/官網、餐廳分類
 

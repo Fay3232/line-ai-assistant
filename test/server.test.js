@@ -12,7 +12,7 @@ test("GET /health returns ok", async () => {
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.ok, true);
-    assert.equal(body.version, "food-details-format-2026-06-05");
+    assert.equal(body.version, "weather-details-format-2026-06-05");
     assert.equal(body.aiProvider, "gemini");
   } finally {
     await close(server.instance);

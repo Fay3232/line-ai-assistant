@@ -64,6 +64,10 @@ export async function answerWithGemini({ text, location }) {
 
   const toolArgs = sanitizeToolArgs(intent, text);
   const toolResult = await runTool(intent.toolName, toolArgs, { location });
+  if (intent.toolName === "get_weather") {
+    return formatWeatherToolResult(toolArgs, toolResult);
+  }
+
   if (intent.toolName === "search_food") {
     return formatFoodToolResult(toolArgs, toolResult);
   }
@@ -248,6 +252,183 @@ function formatLineReply(text) {
     .map((line) => line.trimEnd())
     .join("\n")
     .trim();
+}
+
+function formatWeatherToolResult(toolArgs, toolResult) {
+  const displayName = toolResult.displayName
+    || toolResult.locality
+    || toolResult.city
+    || String(toolArgs.city || "").trim()
+    || "指定地點";
+
+  if (toolResult.needsConfiguration) {
+    return formatLineReply([
+      "天氣查詢尚未完成設定",
+      "",
+      `地點：${displayName}`,
+      `缺少：${toolResult.needsConfiguration}`,
+      toolResult.message || "請到 Render Environment 補上設定。",
+      "設定後請重新部署 Render。"
+    ].join("\n"));
+  }
+
+  if (toolResult.providerError) {
+    return formatLineReply([
+      `${displayName}天氣查詢暫時失敗`,
+      "",
+      toolResult.message || "中央氣象署資料暫時無法回應，請稍後再試。"
+    ].join("\n"));
+  }
+
+  if (!toolResult.ok) {
+    return formatLineReply([
+      `${displayName}天氣查詢`,
+      "",
+      toolResult.message || "目前查不到這個地點的天氣資料。"
+    ].join("\n"));
+  }
+
+  const periods = buildWeatherPeriods(toolResult.forecast || []).slice(0, 3);
+  if (!periods.length) {
+    return formatLineReply([
+      `${displayName}天氣預報`,
+      "",
+      "中央氣象署有回傳資料，但目前沒有可整理的預報時段。",
+      "",
+      `資料來源：${toolResult.source || "CWA"}`
+    ].join("\n"));
+  }
+
+  const lines = [
+    `${displayName}天氣預報`,
+    ""
+  ];
+
+  for (const period of periods) {
+    lines.push(period.time || "預報時段");
+    lines.push(`天氣：${period.weather || "未提供"}`);
+    lines.push(`降雨機率：${period.rain || "未提供"}`);
+    lines.push(`氣溫：${period.temperature || "未提供"}`);
+    if (period.comfort) {
+      lines.push(`舒適度：${period.comfort}`);
+    }
+    if (period.apparentTemperature) {
+      lines.push(`體感：${period.apparentTemperature}`);
+    }
+    lines.push("");
+  }
+
+  lines.push(`資料來源：${toolResult.source || "CWA"}`);
+  return formatLineReply(lines.join("\n"));
+}
+
+function buildWeatherPeriods(forecast) {
+  const weather = findWeatherElement(forecast, [/天氣現象/, /^Wx$/i]);
+  const rain = findWeatherElement(forecast, [/降雨機率/, /^PoP/i]);
+  const temperature = findWeatherElement(forecast, [/^溫度$/, /^T$/i]);
+  const minTemperature = findWeatherElement(forecast, [/最低溫度/, /^MinT$/i]);
+  const maxTemperature = findWeatherElement(forecast, [/最高溫度/, /^MaxT$/i]);
+  const comfort = findWeatherElement(forecast, [/舒適/, /^CI$/i]);
+  const apparentTemperature = findWeatherElement(forecast, [/體感/, /^AT$/i]);
+
+  const count = Math.max(
+    weather?.periods?.length || 0,
+    rain?.periods?.length || 0,
+    temperature?.periods?.length || 0,
+    minTemperature?.periods?.length || 0,
+    maxTemperature?.periods?.length || 0,
+    comfort?.periods?.length || 0,
+    apparentTemperature?.periods?.length || 0
+  );
+
+  return Array.from({ length: count }, (_, index) => {
+    const weatherPeriod = readWeatherPeriod(weather, index);
+    const rainPeriod = readWeatherPeriod(rain, index);
+    const temperaturePeriod = readWeatherPeriod(temperature, index);
+    const minPeriod = readWeatherPeriod(minTemperature, index);
+    const maxPeriod = readWeatherPeriod(maxTemperature, index);
+    const comfortPeriod = readWeatherPeriod(comfort, index);
+    const apparentPeriod = readWeatherPeriod(apparentTemperature, index);
+    const timeSource = weatherPeriod || rainPeriod || temperaturePeriod || minPeriod || maxPeriod || comfortPeriod || apparentPeriod;
+
+    return {
+      time: formatWeatherTimeRange(timeSource?.startTime, timeSource?.endTime),
+      weather: weatherPeriod?.value || "",
+      rain: formatRainValue(rainPeriod?.value, rainPeriod?.unit),
+      temperature: formatTemperatureValue({ temperaturePeriod, minPeriod, maxPeriod }),
+      comfort: comfortPeriod?.value || "",
+      apparentTemperature: formatTemperatureUnit(apparentPeriod?.value, apparentPeriod?.unit)
+    };
+  }).filter((period) => period.weather || period.rain || period.temperature || period.comfort || period.apparentTemperature);
+}
+
+function findWeatherElement(forecast, patterns) {
+  return forecast.find((element) => {
+    const name = String(element.name || "");
+    return patterns.some((pattern) => pattern.test(name));
+  });
+}
+
+function readWeatherPeriod(element, index) {
+  return element?.periods?.[index] || null;
+}
+
+function formatWeatherTimeRange(startTime, endTime) {
+  const start = parseCwaTime(startTime);
+  const end = parseCwaTime(endTime);
+  if (!start && !end) return "";
+  if (!start) return end.label;
+  if (!end) return start.label;
+  if (start.dateLabel === end.dateLabel) {
+    return `${start.dateLabel} ${start.timeLabel}-${end.timeLabel}`;
+  }
+  return `${start.label}-${end.label}`;
+}
+
+function parseCwaTime(value) {
+  const match = String(value || "").match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!match) return null;
+  const [, , month, day, hour, minute] = match;
+  const dateLabel = `${Number(month)}/${Number(day)}`;
+  const timeLabel = `${hour}:${minute}`;
+  return {
+    dateLabel,
+    timeLabel,
+    label: `${dateLabel} ${timeLabel}`
+  };
+}
+
+function formatRainValue(value, unit) {
+  if (!value) return "";
+  const text = String(value);
+  if (text.includes("%")) return text;
+  return unit === "%" || /^\d+$/.test(text) ? `${text}%` : [text, unit].filter(Boolean).join("");
+}
+
+function formatTemperatureValue({ temperaturePeriod, minPeriod, maxPeriod }) {
+  if (minPeriod?.value && maxPeriod?.value) {
+    return `${formatTemperatureUnit(minPeriod.value, minPeriod.unit)} 至 ${formatTemperatureUnit(maxPeriod.value, maxPeriod.unit)}`;
+  }
+  if (temperaturePeriod?.value) {
+    return formatTemperatureUnit(temperaturePeriod.value, temperaturePeriod.unit);
+  }
+  if (minPeriod?.value) {
+    return `最低 ${formatTemperatureUnit(minPeriod.value, minPeriod.unit)}`;
+  }
+  if (maxPeriod?.value) {
+    return `最高 ${formatTemperatureUnit(maxPeriod.value, maxPeriod.unit)}`;
+  }
+  return "";
+}
+
+function formatTemperatureUnit(value, unit) {
+  if (!value) return "";
+  const text = String(value);
+  if (text.includes("°") || text.includes("度")) return text;
+  if (unit === "C" || unit === "°C" || unit === "攝氏度" || /^-?\d+(\.\d+)?$/.test(text)) {
+    return `${text}°C`;
+  }
+  return [text, unit].filter(Boolean).join("");
 }
 
 function formatFoodToolResult(toolArgs, toolResult) {

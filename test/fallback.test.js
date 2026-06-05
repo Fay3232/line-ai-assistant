@@ -76,17 +76,14 @@ test("Gemini provider lets Gemini route weather before tool lookup", async () =>
       toolName: "get_weather",
       args: { city: "台北市" },
       reply: ""
-    },
-    "此功能還缺 Render Environment 變數：CWA_API_KEY"
+    }
   ]);
 
   try {
     const reply = await answerWithGemini({ text: "幫我查明天台北市的天氣" });
 
     assert.match(reply, /CWA_API_KEY/);
-    assert.equal(calls.length, 2);
-    assert.match(calls[1].contents[0].parts[0].text, /Format for a LINE chat bubble/);
-    assert.match(calls[1].contents[0].parts[0].text, /• /);
+    assert.equal(calls.length, 1);
   } finally {
     calls.restore();
   }
@@ -98,18 +95,129 @@ test("Gemini provider corrects Tamsui weather location before tool lookup", asyn
       toolName: "get_weather",
       args: { city: "臺北市" },
       reply: ""
-    },
-    "淡水區天氣資料查詢中。"
+    }
   ]);
 
   try {
     const reply = await answerWithGemini({ text: "明天淡水的天氣" });
 
     assert.match(reply, /淡水/);
-    assert.equal(calls.length, 2);
-    assert.match(calls[1].contents[0].parts[0].text, /淡水區/);
+    assert.equal(calls.length, 1);
   } finally {
     calls.restore();
+  }
+});
+
+test("Gemini provider formats weather details without a second Gemini summary", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = config.providers.cwaApiKey;
+  const geminiCalls = [];
+  const cwaCalls = [];
+
+  config.providers.cwaApiKey = "test-cwa-key";
+  globalThis.fetch = async (url, options) => {
+    if (String(url).includes("generativelanguage.googleapis.com")) {
+      geminiCalls.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [{ text: JSON.stringify({
+                toolName: "get_weather",
+                args: { city: "臺北市" },
+                reply: ""
+              }) }]
+            }
+          }
+        ]
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    cwaCalls.push(String(url));
+    return new Response(JSON.stringify({
+      records: {
+        location: [
+          {
+            locationName: "臺北市",
+            weatherElement: [
+              {
+                elementName: "Wx",
+                time: [
+                  {
+                    startTime: "2026-06-06 06:00:00",
+                    endTime: "2026-06-06 18:00:00",
+                    parameter: { parameterName: "陰短暫陣雨" }
+                  }
+                ]
+              },
+              {
+                elementName: "PoP",
+                time: [
+                  {
+                    startTime: "2026-06-06 06:00:00",
+                    endTime: "2026-06-06 18:00:00",
+                    parameter: { parameterName: "40", parameterUnit: "%" }
+                  }
+                ]
+              },
+              {
+                elementName: "MinT",
+                time: [
+                  {
+                    startTime: "2026-06-06 06:00:00",
+                    endTime: "2026-06-06 18:00:00",
+                    parameter: { parameterName: "26", parameterUnit: "C" }
+                  }
+                ]
+              },
+              {
+                elementName: "MaxT",
+                time: [
+                  {
+                    startTime: "2026-06-06 06:00:00",
+                    endTime: "2026-06-06 18:00:00",
+                    parameter: { parameterName: "27", parameterUnit: "C" }
+                  }
+                ]
+              },
+              {
+                elementName: "CI",
+                time: [
+                  {
+                    startTime: "2026-06-06 06:00:00",
+                    endTime: "2026-06-06 18:00:00",
+                    parameter: { parameterName: "舒適至悶熱" }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  try {
+    const reply = await answerWithGemini({ text: "明天台北天氣" });
+
+    assert.match(reply, /臺北市天氣預報/);
+    assert.match(reply, /6\/6 06:00-18:00/);
+    assert.match(reply, /天氣：陰短暫陣雨/);
+    assert.match(reply, /降雨機率：40%/);
+    assert.match(reply, /氣溫：26°C 至 27°C/);
+    assert.match(reply, /舒適度：舒適至悶熱/);
+    assert.match(reply, /資料來源：CWA F-C0032-001/);
+    assert.equal(geminiCalls.length, 1);
+    assert.equal(cwaCalls.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    config.providers.cwaApiKey = originalKey;
   }
 });
 
