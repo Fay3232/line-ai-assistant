@@ -30,18 +30,19 @@ test("Gemini provider sends general questions directly to Gemini answer mode", a
   }
 });
 
-test("Gemini provider sends stock questions directly to Gemini without tool lookup", async () => {
+test("Gemini provider answers stock questions with Google Search grounding", async () => {
   const calls = mockGemini([
-    "2330 的股價資訊可能不是即時報價，建議再確認券商或交易所資料。僅供資訊參考，不構成投資建議。"
+    "台積電（2330.TW）最新股價請以查詢來源為準。僅供資訊參考，不構成投資建議。"
   ]);
 
   try {
     const reply = await answerWithGemini({ text: "2330 股價" });
 
-    assert.match(reply, /2330/);
+    assert.match(reply, /台積電|2330/);
     assert.match(reply, /不構成投資建議/);
     assert.equal(calls.length, 1);
-    assert.match(calls[0].contents[0].parts[0].text, /Answer this LINE user message directly/);
+    assert.deepEqual(calls[0].tools, [{ google_search: {} }]);
+    assert.match(calls[0].contents[0].parts[0].text, /Google Search grounding/);
     assert.doesNotMatch(calls[0].contents[0].parts[0].text, /Classify this LINE message/);
   } finally {
     calls.restore();

@@ -7,7 +7,7 @@ const systemInstruction = `
 You are a Traditional Chinese LINE assistant for users in Taiwan.
 You can answer general questions directly.
 For current Taiwan weather and food/restaurant recommendations, choose the appropriate tool first, then summarize the tool result.
-For stock questions, answer directly with Gemini. Do not claim you have guaranteed realtime quotes; mention uncertainty when the user asks for current prices.
+For stock questions, answer with Gemini plus Google Search grounding. Do not use model memory for current prices.
 Keep replies short, clear, and mobile-friendly.
 Do not fabricate current weather or restaurant details when a tool result is unavailable.
 Stock information is for reference only and is not investment advice.
@@ -42,6 +42,14 @@ const intentSchema = {
 
 export async function answerWithGemini({ text, location }) {
   const userPrompt = buildUserPrompt({ text, location });
+  if (isStockQuestion(text)) {
+    return generateText({
+      prompt: buildStockAnswerPrompt(userPrompt),
+      system: systemInstruction,
+      tools: [{ google_search: {} }]
+    });
+  }
+
   if (!mayNeedRealtimeTool(text, location)) {
     return generateText({
       prompt: buildDirectAnswerPrompt(userPrompt),
@@ -141,30 +149,36 @@ ${JSON.stringify(toolResult)}
   return formatLineReply(text);
 }
 
-async function generateText({ prompt, system, generationConfig = {} }) {
+async function generateText({ prompt, system, generationConfig = {}, tools = [] }) {
   const url = new URL(`${GEMINI_ENDPOINT_BASE}/${config.gemini.model}:generateContent`);
+  const body = {
+    systemInstruction: {
+      parts: [{ text: system }]
+    },
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: prompt }]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 800,
+      ...generationConfig
+    }
+  };
+
+  if (tools.length) {
+    body.tools = tools;
+  }
+
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-goog-api-key": config.gemini.apiKey
     },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: system }]
-      },
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: prompt }]
-        }
-      ],
-      generationConfig: {
-        temperature: 0.2,
-        maxOutputTokens: 800,
-        ...generationConfig
-      }
-    })
+    body: JSON.stringify(body)
   });
 
   const payload = await response.text();
@@ -209,7 +223,29 @@ Requirements:
 - Keep it concise and useful for mobile chat.
 - If the user asks for recommendations, give concrete options.
 - If the user asks about current weather or restaurants, say you need the realtime tool instead of inventing data.
-- If the user asks about stocks or stock prices, answer directly with Gemini. Be clear that prices may not be realtime, avoid fabricating exact live quotes, and include "僅供資訊參考，不構成投資建議。"
+
+User message:
+${userPrompt}
+`.trim();
+}
+
+function buildStockAnswerPrompt(userPrompt) {
+  return `
+Answer this stock-related LINE message in Traditional Chinese using Google Search grounding.
+
+Rules:
+- Use current web search results, not model memory, for prices and market status.
+- If the user asks "今天台積電股價多少", interpret it as TSMC / 台積電 / 2330.TW.
+- If you find a reliable current quote, include:
+  1. Stock name and ticker
+  2. Latest price
+  3. Change or percentage change when available
+  4. Quote time and timezone when available
+  5. Source name
+- If search results are unclear or outdated, say you cannot confirm the latest price and suggest checking a broker app, TWSE, Yahoo Finance, or Google Finance.
+- Do not fabricate exact live prices.
+- Keep the reply short and LINE-friendly.
+- Always include: "僅供資訊參考，不構成投資建議。"
 
 User message:
 ${userPrompt}
@@ -220,6 +256,10 @@ function mayNeedRealtimeTool(text, location) {
   const message = String(text || "");
   if (location) return true;
   return /天氣|下雨|降雨|氣溫|溫度|颱風|天候|美食|餐廳|吃什麼|小吃|市場|咖啡|拉麵|牛肉麵|火鍋|早餐|午餐|晚餐|宵夜/i.test(message);
+}
+
+function isStockQuestion(text) {
+  return /\b[A-Z]{1,5}\b|[0-9]{4,6}|股票|股價|台股|美股|報價|台積電|鴻海|聯發科|TSMC|AAPL|NVDA|TSLA/i.test(String(text || ""));
 }
 
 function sanitizeToolArgs(intent, userText = "") {

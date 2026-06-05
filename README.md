@@ -6,10 +6,10 @@ LINE 官方帳號 AI 機器人範本。Render 上的 Node.js webhook 接收 LINE
 
 - Gemini 一般問答：聊天、文案、翻譯、摘要、規劃、知識問答
 - 天氣：中央氣象署 Open Data
-- 股票：直接由 Gemini 回答，不再使用 TWSE 或 Finnhub API
+- 股票：Gemini 搭配 Google Search grounding 回答，不再使用 TWSE 或 Finnhub API
 - 美食：Google Places 隨機推薦 1 家
 
-> 股票資訊由 Gemini 產生，可能不是即時報價，僅供參考，不構成投資建議。
+> 股票資訊由 Gemini 透過 Google Search grounding 整理，仍可能受搜尋來源延遲影響，僅供參考，不構成投資建議。
 
 ## 1. 本機啟動
 
@@ -24,7 +24,7 @@ Copy-Item .env.example .env
 ```env
 AI_PROVIDER=gemini
 GEMINI_API_KEY=你的_Gemini_API_Key
-GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_MODEL=gemini-3.5-flash
 ENABLE_SIMULATE_ROUTE=true
 ```
 
@@ -66,7 +66,7 @@ line-ai-assistant → Environment → Add Environment Variable
 ```text
 AI_PROVIDER=gemini
 GEMINI_API_KEY=你的_Gemini_API_Key
-GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_MODEL=gemini-3.5-flash
 LINE_CHANNEL_SECRET=你的_LINE_Channel_Secret
 LINE_CHANNEL_ACCESS_TOKEN=你的_LINE_Channel_Access_Token
 ALLOW_UNSIGNED_WEBHOOKS=false
@@ -168,5 +168,6 @@ node --test
 ## 7. 注意事項
 
 - 所有問題都會先交給 Gemini，因此 Gemini 免費額度比較容易遇到 429；等約 1 分鐘通常會恢復。
+- 股票問題會啟用 Gemini 的 Google Search grounding；Gemini 3 系列使用此工具可能產生額外計費，請留意 Google AI Studio / Google Cloud 用量。
 - Google Places 通常需要 Google Cloud billing，且要啟用 Places API (New)。
 - `.env.example` 只能放 placeholder，不要放真實 API key。
