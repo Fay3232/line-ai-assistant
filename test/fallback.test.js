@@ -5,6 +5,7 @@ process.env.AI_PROVIDER = "gemini";
 
 const { answerUserMessage } = await import("../src/ai.js");
 const { answerWithGemini } = await import("../src/providers/gemini.js");
+const { config } = await import("../src/config.js");
 
 test("missing Gemini key reply does not mention OpenAI", async () => {
   const reply = await answerUserMessage({ text: "幫我寫一段開幕文案" });
@@ -30,21 +31,41 @@ test("Gemini provider sends general questions directly to Gemini answer mode", a
   }
 });
 
-test("Gemini provider answers stock questions with Google Search grounding", async () => {
+test("Gemini provider answers stock questions without search grounding by default", async () => {
   const calls = mockGemini([
-    "台積電（2330.TW）最新股價請以查詢來源為準。僅供資訊參考，不構成投資建議。"
+    "我目前無法確認 2330 的即時股價，建議查看券商、Google Finance 或 TWSE。僅供資訊參考，不構成投資建議。"
   ]);
 
   try {
     const reply = await answerWithGemini({ text: "2330 股價" });
 
-    assert.match(reply, /台積電|2330/);
+    assert.match(reply, /2330|即時股價/);
     assert.match(reply, /不構成投資建議/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].tools, undefined);
+    assert.match(calls[0].contents[0].parts[0].text, /Google Search grounding is disabled/);
+    assert.doesNotMatch(calls[0].contents[0].parts[0].text, /Classify this LINE message/);
+  } finally {
+    calls.restore();
+  }
+});
+
+test("Gemini provider can enable Google Search grounding for stock questions", async () => {
+  const calls = mockGemini([
+    "台積電（2330.TW）最新股價請以查詢來源為準。僅供資訊參考，不構成投資建議。"
+  ]);
+  const original = config.gemini.enableSearchGrounding;
+  config.gemini.enableSearchGrounding = true;
+
+  try {
+    const reply = await answerWithGemini({ text: "今天台積電股價多少" });
+
+    assert.match(reply, /台積電|2330/);
     assert.equal(calls.length, 1);
     assert.deepEqual(calls[0].tools, [{ google_search: {} }]);
     assert.match(calls[0].contents[0].parts[0].text, /Google Search grounding/);
-    assert.doesNotMatch(calls[0].contents[0].parts[0].text, /Classify this LINE message/);
   } finally {
+    config.gemini.enableSearchGrounding = original;
     calls.restore();
   }
 });

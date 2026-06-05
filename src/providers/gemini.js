@@ -43,15 +43,11 @@ const intentSchema = {
 export async function answerWithGemini({ text, location }) {
   const userPrompt = buildUserPrompt({ text, location });
   if (isStockQuestion(text)) {
-    return generateText({
-      prompt: buildStockAnswerPrompt(userPrompt),
-      system: systemInstruction,
-      tools: [{ google_search: {} }]
-    });
+    return answerStockQuestion(userPrompt);
   }
 
   if (!mayNeedRealtimeTool(text, location)) {
-    return generateText({
+    return generateTextWithFallback({
       prompt: buildDirectAnswerPrompt(userPrompt),
       system: systemInstruction
     });
@@ -60,7 +56,7 @@ export async function answerWithGemini({ text, location }) {
   const intent = await detectIntent(userPrompt);
 
   if (intent.toolName === "none") {
-    return generateText({
+    return generateTextWithFallback({
       prompt: buildDirectAnswerPrompt(userPrompt),
       system: systemInstruction
     });
@@ -91,7 +87,7 @@ User message:
 ${userPrompt}
 `.trim();
 
-  const text = await generateText({
+  const text = await generateTextWithFallback({
     prompt,
     system: systemInstruction,
     generationConfig: {
@@ -142,15 +138,50 @@ Tool result:
 ${JSON.stringify(toolResult)}
 `.trim();
 
-  const text = await generateText({
+  const text = await generateTextWithFallback({
     prompt,
     system: systemInstruction
   });
   return formatLineReply(text);
 }
 
-async function generateText({ prompt, system, generationConfig = {}, tools = [] }) {
-  const url = new URL(`${GEMINI_ENDPOINT_BASE}/${config.gemini.model}:generateContent`);
+async function answerStockQuestion(userPrompt) {
+  if (config.gemini.enableSearchGrounding) {
+    return generateTextWithFallback({
+      prompt: buildStockGroundedAnswerPrompt(userPrompt),
+      fallbackPrompt: buildStockLimitedAnswerPrompt(userPrompt),
+      fallbackTools: [],
+      system: systemInstruction,
+      tools: [{ google_search: {} }]
+    });
+  }
+
+  return generateTextWithFallback({
+    prompt: buildStockLimitedAnswerPrompt(userPrompt),
+    system: systemInstruction
+  });
+}
+
+async function generateTextWithFallback(options) {
+  try {
+    return await generateText(options);
+  } catch (error) {
+    const fallbackModel = config.gemini.fallbackModel;
+    if (!isQuotaError(error) || !fallbackModel || fallbackModel === config.gemini.model) {
+      throw error;
+    }
+
+    return generateText({
+      ...options,
+      model: fallbackModel,
+      prompt: options.fallbackPrompt || options.prompt,
+      tools: options.fallbackTools ?? options.tools
+    });
+  }
+}
+
+async function generateText({ prompt, system, generationConfig = {}, tools = [], model = config.gemini.model }) {
+  const url = new URL(`${GEMINI_ENDPOINT_BASE}/${model}:generateContent`);
   const body = {
     systemInstruction: {
       parts: [{ text: system }]
@@ -183,7 +214,7 @@ async function generateText({ prompt, system, generationConfig = {}, tools = [] 
 
   const payload = await response.text();
   if (!response.ok) {
-    throw new Error(`Gemini request failed: ${response.status} ${payload}`);
+    throw new GeminiRequestError(response.status, payload);
   }
 
   const data = payload ? JSON.parse(payload) : {};
@@ -193,6 +224,15 @@ async function generateText({ prompt, system, generationConfig = {}, tools = [] 
     throw new Error("Gemini returned an empty response.");
   }
   return text;
+}
+
+class GeminiRequestError extends Error {
+  constructor(status, payload) {
+    super(`Gemini request failed: ${status} ${payload}`);
+    this.name = "GeminiRequestError";
+    this.status = status;
+    this.payload = payload;
+  }
 }
 
 function formatLineReply(text) {
@@ -229,7 +269,7 @@ ${userPrompt}
 `.trim();
 }
 
-function buildStockAnswerPrompt(userPrompt) {
+function buildStockGroundedAnswerPrompt(userPrompt) {
   return `
 Answer this stock-related LINE message in Traditional Chinese using Google Search grounding.
 
@@ -252,6 +292,24 @@ ${userPrompt}
 `.trim();
 }
 
+function buildStockLimitedAnswerPrompt(userPrompt) {
+  return `
+Answer this stock-related LINE message in Traditional Chinese.
+
+Important:
+- Google Search grounding is disabled or quota-limited in this deployment.
+- Do not provide exact current stock prices from memory.
+- If the user asks for today's/latest/current price, say you cannot confirm the realtime quote right now.
+- Suggest checking a broker app, Google Finance, Yahoo Finance, TWSE, or Nasdaq.
+- You may still explain the company, ticker, what the quoted fields mean, and how to interpret price/change/volume.
+- Keep the reply short and LINE-friendly.
+- Always include: "僅供資訊參考，不構成投資建議。"
+
+User message:
+${userPrompt}
+`.trim();
+}
+
 function mayNeedRealtimeTool(text, location) {
   const message = String(text || "");
   if (location) return true;
@@ -260,6 +318,14 @@ function mayNeedRealtimeTool(text, location) {
 
 function isStockQuestion(text) {
   return /\b[A-Z]{1,5}\b|[0-9]{4,6}|股票|股價|台股|美股|報價|台積電|鴻海|聯發科|TSMC|AAPL|NVDA|TSLA/i.test(String(text || ""));
+}
+
+function isQuotaError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("429")
+    || message.includes("RESOURCE_EXHAUSTED")
+    || message.includes("Quota exceeded")
+    || message.includes("generate_content_free_tier_requests");
 }
 
 function sanitizeToolArgs(intent, userText = "") {

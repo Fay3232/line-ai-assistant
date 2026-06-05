@@ -12,7 +12,7 @@ function readNumber(name, defaultValue) {
 }
 
 export const config = {
-  appVersion: process.env.APP_VERSION || "gemini-3-5-flash-2026-06-05",
+  appVersion: process.env.APP_VERSION || "gemini-quota-guard-2026-06-05",
   port: readNumber("PORT", 3000),
   nodeEnv: process.env.NODE_ENV || "development",
   allowUnsignedWebhooks: readBoolean("ALLOW_UNSIGNED_WEBHOOKS", false),
@@ -28,7 +28,9 @@ export const config = {
   },
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || "",
-    model: process.env.GEMINI_MODEL || "gemini-3.5-flash"
+    model: process.env.GEMINI_MODEL || "gemini-3.5-flash",
+    fallbackModel: process.env.GEMINI_FALLBACK_MODEL || "gemini-2.5-flash-lite",
+    enableSearchGrounding: readBoolean("GEMINI_ENABLE_SEARCH_GROUNDING", false)
   },
   providers: {
     cwaApiKey: process.env.CWA_API_KEY || "",
