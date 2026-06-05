@@ -200,7 +200,7 @@ async function searchFoodByText({ textQuery, latitude, longitude, openNow, sourc
     headers: {
       "Content-Type": "application/json",
       "X-Goog-Api-Key": config.providers.googlePlacesApiKey,
-      "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.googleMapsUri,places.currentOpeningHours"
+      "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.shortFormattedAddress,places.rating,places.googleMapsUri,places.websiteUri,places.primaryType,places.primaryTypeDisplayName,places.types,places.currentOpeningHours"
     },
     body: JSON.stringify(body)
   });
@@ -258,8 +258,14 @@ function normalizePlacesResponse(data, source) {
   const candidates = (data.places || []).map((place) => ({
     name: place.displayName?.text || "",
     address: place.formattedAddress || "",
+    shortAddress: place.shortFormattedAddress || "",
     rating: place.rating || null,
     mapsUrl: place.googleMapsUri || "",
+    websiteUrl: place.websiteUri || "",
+    primaryType: place.primaryType || "",
+    primaryTypeName: place.primaryTypeDisplayName?.text || "",
+    types: Array.isArray(place.types) ? place.types : [],
+    categories: formatPlaceCategories(place),
     openNow: place.currentOpeningHours?.openNow
   }));
   const place = pickRandom(candidates);
@@ -276,6 +282,24 @@ function normalizePlacesResponse(data, source) {
 function pickRandom(items) {
   if (!items.length) return null;
   return items[Math.floor(Math.random() * items.length)];
+}
+
+function formatPlaceCategories(place) {
+  const labels = [
+    place.primaryTypeDisplayName?.text,
+    translatePlaceType(place.primaryType),
+    ...(Array.isArray(place.types) ? place.types.map(translatePlaceType) : [])
+  ]
+    .filter(Boolean)
+    .filter((label) => !genericPlaceTypes.has(label));
+
+  return [...new Set(labels)].slice(0, 3).join(" / ");
+}
+
+function translatePlaceType(type) {
+  const normalized = String(type || "").trim();
+  if (!normalized) return "";
+  return placeTypeLabels.get(normalized) || normalized.replace(/_/g, " ");
 }
 
 function locationFallback(args, location) {
@@ -367,6 +391,53 @@ function inferToolSource(name) {
 function isFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
+
+const genericPlaceTypes = new Set([
+  "地點",
+  "餐飲",
+  "point of interest",
+  "establishment",
+  "food"
+]);
+
+const placeTypeLabels = new Map([
+  ["restaurant", "餐廳"],
+  ["cafe", "咖啡廳"],
+  ["bar", "酒吧"],
+  ["bakery", "烘焙坊"],
+  ["meal_takeaway", "外帶餐廳"],
+  ["meal_delivery", "外送餐廳"],
+  ["breakfast_restaurant", "早餐店"],
+  ["brunch_restaurant", "早午餐"],
+  ["chinese_restaurant", "中式餐廳"],
+  ["taiwanese_restaurant", "台式餐廳"],
+  ["japanese_restaurant", "日式餐廳"],
+  ["korean_restaurant", "韓式餐廳"],
+  ["thai_restaurant", "泰式餐廳"],
+  ["vietnamese_restaurant", "越式餐廳"],
+  ["italian_restaurant", "義式餐廳"],
+  ["french_restaurant", "法式餐廳"],
+  ["american_restaurant", "美式餐廳"],
+  ["mexican_restaurant", "墨西哥餐廳"],
+  ["indian_restaurant", "印度餐廳"],
+  ["seafood_restaurant", "海鮮餐廳"],
+  ["steak_house", "牛排館"],
+  ["sushi_restaurant", "壽司店"],
+  ["ramen_restaurant", "拉麵店"],
+  ["barbecue_restaurant", "燒烤餐廳"],
+  ["hot_pot_restaurant", "火鍋店"],
+  ["vegetarian_restaurant", "素食餐廳"],
+  ["vegan_restaurant", "純素餐廳"],
+  ["pizza_restaurant", "披薩店"],
+  ["hamburger_restaurant", "漢堡店"],
+  ["ice_cream_shop", "冰淇淋店"],
+  ["dessert_shop", "甜點店"],
+  ["coffee_shop", "咖啡店"],
+  ["sandwich_shop", "三明治店"],
+  ["food_court", "美食街"],
+  ["market", "市場"],
+  ["night_market", "夜市"]
+]);
 
 const cityAliases = new Map([
   ["台北", "臺北市"],

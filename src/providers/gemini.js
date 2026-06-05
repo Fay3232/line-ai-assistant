@@ -64,6 +64,10 @@ export async function answerWithGemini({ text, location }) {
 
   const toolArgs = sanitizeToolArgs(intent, text);
   const toolResult = await runTool(intent.toolName, toolArgs, { location });
+  if (intent.toolName === "search_food") {
+    return formatFoodToolResult(toolArgs, toolResult);
+  }
+
   return summarizeToolResult({
     userPrompt,
     toolName: intent.toolName,
@@ -244,6 +248,58 @@ function formatLineReply(text) {
     .map((line) => line.trimEnd())
     .join("\n")
     .trim();
+}
+
+function formatFoodToolResult(toolArgs, toolResult) {
+  if (toolResult.needsConfiguration) {
+    return formatLineReply([
+      "美食查詢尚未完成設定",
+      "",
+      `缺少：${toolResult.needsConfiguration}`,
+      toolResult.message || "請到 Render Environment 補上設定。",
+      "設定後請重新部署 Render。"
+    ].join("\n"));
+  }
+
+  if (toolResult.providerError) {
+    return formatLineReply([
+      "美食查詢暫時失敗",
+      "",
+      toolResult.message || "Google Places 暫時無法回應，請稍後再試。"
+    ].join("\n"));
+  }
+
+  const place = toolResult.places?.[0];
+  if (!toolResult.ok || !place) {
+    return formatLineReply([
+      `${String(toolArgs.query || "美食").trim()}推薦`,
+      "",
+      toolResult.message || "目前找不到符合條件的餐廳，可以換個地區或關鍵字再試。"
+    ].join("\n"));
+  }
+
+  const address = place.address || place.shortAddress || "未提供";
+  const category = place.categories || place.primaryTypeName || "未提供";
+  const rating = place.rating ? `★ ${place.rating}` : "未提供";
+  const mapsUrl = place.mapsUrl || "未提供";
+  const websiteUrl = place.websiteUrl || "未提供";
+  const openStatus = typeof place.openNow === "boolean"
+    ? (place.openNow ? "營業中" : "目前未營業")
+    : "未提供";
+
+  return formatLineReply([
+    `${String(toolArgs.query || "美食").trim()}推薦`,
+    "",
+    `店名：${place.name || "未提供"}`,
+    `分類：${category}`,
+    `評分：${rating}`,
+    `地址：${address}`,
+    `營業狀態：${openStatus}`,
+    `Google Maps：${mapsUrl}`,
+    `訂位/官網：${websiteUrl}`,
+    "",
+    `資料來源：${toolResult.source || "Google Places"}`
+  ].join("\n"));
 }
 
 function buildUserPrompt({ text, location }) {

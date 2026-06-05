@@ -7,7 +7,7 @@ LINE 官方帳號 AI 機器人範本。Render 上的 Node.js webhook 接收 LINE
 - Gemini 一般問答：聊天、文案、翻譯、摘要、規劃、知識問答
 - 天氣：中央氣象署 Open Data
 - 股票：Gemini 回答；可選擇啟用 Google Search grounding，不再使用 TWSE 或 Finnhub API
-- 美食：Google Places 隨機推薦 1 家
+- 美食：Google Places 隨機推薦 1 家，固定顯示地址、Google Maps、訂位/官網、餐廳分類
 
 > 股票資訊由 Gemini 整理。若未啟用 Google Search grounding，Bot 不會硬報即時股價；若啟用，仍可能受搜尋來源延遲影響。僅供參考，不構成投資建議。
 
@@ -151,6 +151,7 @@ Webhook：開啟
 幫我翻譯這句話成英文：今天很適合喝咖啡
 幫我查明天台北市的天氣
 西湖市場推薦美食有哪些
+淡水美食
 2330 股價
 AAPL 股價
 ```

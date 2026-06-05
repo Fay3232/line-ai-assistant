@@ -127,9 +127,77 @@ test("Gemini provider lets Gemini route food before tool lookup", async () => {
     const reply = await answerWithGemini({ text: "西湖市場推薦美食有哪些" });
 
     assert.match(reply, /GOOGLE_PLACES_API_KEY/);
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 1);
   } finally {
     calls.restore();
+  }
+});
+
+test("Gemini provider formats food details without a second Gemini summary", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = config.providers.googlePlacesApiKey;
+  const originalRandom = Math.random;
+  const geminiCalls = [];
+  const placesCalls = [];
+
+  config.providers.googlePlacesApiKey = "test-key";
+  Math.random = () => 0;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).includes("generativelanguage.googleapis.com")) {
+      geminiCalls.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [{ text: JSON.stringify({
+                toolName: "search_food",
+                args: { query: "淡水美食" },
+                reply: ""
+              }) }]
+            }
+          }
+        ]
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    placesCalls.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({
+      places: [
+        {
+          displayName: { text: "海宴 新台菜會館" },
+          formattedAddress: "新北市淡水區中正路一段87巷1號",
+          rating: 4.6,
+          googleMapsUri: "https://maps.example/haiyan",
+          websiteUri: "https://reserve.example/haiyan",
+          primaryType: "taiwanese_restaurant",
+          primaryTypeDisplayName: { text: "台式餐廳" },
+          types: ["taiwanese_restaurant", "restaurant", "food", "point_of_interest"],
+          currentOpeningHours: { openNow: true }
+        }
+      ]
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  try {
+    const reply = await answerWithGemini({ text: "淡水美食" });
+
+    assert.match(reply, /店名：海宴 新台菜會館/);
+    assert.match(reply, /分類：台式餐廳 \/ 餐廳/);
+    assert.match(reply, /地址：新北市淡水區中正路一段87巷1號/);
+    assert.match(reply, /Google Maps：https:\/\/maps\.example\/haiyan/);
+    assert.match(reply, /訂位\/官網：https:\/\/reserve\.example\/haiyan/);
+    assert.equal(geminiCalls.length, 1);
+    assert.equal(placesCalls.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    config.providers.googlePlacesApiKey = originalKey;
+    Math.random = originalRandom;
   }
 });
 
