@@ -47,19 +47,13 @@ export async function answerWithGemini({ text, location }) {
   }
 
   if (!mayNeedRealtimeTool(text, location)) {
-    return generateTextWithFallback({
-      prompt: buildDirectAnswerPrompt(userPrompt),
-      system: systemInstruction
-    });
+    return answerDirectQuestion(userPrompt);
   }
 
   const intent = await detectIntent(userPrompt);
 
   if (intent.toolName === "none") {
-    return generateTextWithFallback({
-      prompt: buildDirectAnswerPrompt(userPrompt),
-      system: systemInstruction
-    });
+    return answerDirectQuestion(userPrompt);
   }
 
   const toolArgs = sanitizeToolArgs(intent, text);
@@ -170,6 +164,18 @@ async function answerStockQuestion(userPrompt) {
   });
 }
 
+async function answerDirectQuestion(userPrompt) {
+  const text = await generateTextWithFallback({
+    prompt: buildDirectAnswerPrompt(userPrompt),
+    system: systemInstruction,
+    generationConfig: {
+      maxOutputTokens: 1200
+    }
+  });
+
+  return formatDirectLineReply(text);
+}
+
 async function generateTextWithFallback(options) {
   try {
     return await generateText(options);
@@ -251,6 +257,16 @@ function formatLineReply(text) {
     .split("\n")
     .map((line) => line.trimEnd())
     .join("\n")
+    .trim();
+}
+
+function formatDirectLineReply(text) {
+  return formatLineReply(text)
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/^\s*[-*]\s+/gm, "• ")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
@@ -498,6 +514,10 @@ Answer this LINE user message directly in Traditional Chinese.
 Requirements:
 - Actually answer the request; do not only introduce your capabilities.
 - Keep it concise and useful for mobile chat.
+- Use plain text only. Do not use markdown headings, bold markers, tables, or code fences.
+- Keep the answer complete. Do not end with an unfinished numbered list or half sentence.
+- Prefer 4 to 8 short lines. If the topic is broad, give a compact summary and ask whether the user wants details.
+- For recipe or food-name questions, give a short explanation plus at most 4 simple cooking or eating tips.
 - If the user asks for recommendations, give concrete options.
 - If the user asks about current weather or restaurants, say you need the realtime tool instead of inventing data.
 

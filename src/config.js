@@ -12,7 +12,7 @@ function readNumber(name, defaultValue) {
 }
 
 export const config = {
-  appVersion: process.env.APP_VERSION || "weather-details-format-2026-06-05",
+  appVersion: process.env.APP_VERSION || "line-direct-answer-format-2026-06-05",
   port: readNumber("PORT", 3000),
   nodeEnv: process.env.NODE_ENV || "development",
   allowUnsignedWebhooks: readBoolean("ALLOW_UNSIGNED_WEBHOOKS", false),

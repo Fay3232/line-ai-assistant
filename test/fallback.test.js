@@ -31,6 +31,25 @@ test("Gemini provider sends general questions directly to Gemini answer mode", a
   }
 });
 
+test("Gemini provider cleans markdown from direct LINE answers", async () => {
+  const calls = mockGemini([
+    "### 京醬肉絲\n\n**京醬肉絲**是一道甜鹹醬香的家常菜。\n\n- 常用豬里肌切絲快炒\n- 搭配甜麵醬和蔥絲"
+  ]);
+
+  try {
+    const reply = await answerWithGemini({ text: "京醬肉絲" });
+
+    assert.match(reply, /京醬肉絲是一道甜鹹醬香的家常菜/);
+    assert.match(reply, /• 常用豬里肌切絲快炒/);
+    assert.doesNotMatch(reply, /###|\*\*/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].generationConfig.maxOutputTokens, 1200);
+    assert.match(calls[0].contents[0].parts[0].text, /plain text only/);
+  } finally {
+    calls.restore();
+  }
+});
+
 test("Gemini provider answers stock questions without search grounding by default", async () => {
   const calls = mockGemini([
     "我目前無法確認 2330 的即時股價，建議查看券商、Google Finance 或 TWSE。僅供資訊參考，不構成投資建議。"
