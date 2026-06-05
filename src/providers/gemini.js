@@ -5,8 +5,10 @@ const GEMINI_ENDPOINT_BASE = "https://generativelanguage.googleapis.com/v1beta/m
 
 const systemInstruction = `
 You are a Traditional Chinese LINE assistant for users in Taiwan.
-You can answer general questions and route requests to tools for Taiwan weather, food, Taiwan stocks, and US stocks.
+You can answer general questions directly.
+For current Taiwan weather, food/restaurant recommendations, Taiwan stocks, and US stocks, choose the appropriate tool first, then summarize the tool result.
 Keep replies short, clear, and mobile-friendly.
+Do not fabricate current weather, restaurant details, or stock prices when a tool result is unavailable.
 Stock information is for lookup only and is not investment advice.
 `.trim();
 
@@ -16,7 +18,7 @@ const intentSchema = {
     toolName: {
       type: "string",
       enum: ["none", "get_weather", "search_food", "get_stock_quote"],
-      description: "Tool to call. Use none when no tool is needed."
+      description: "Tool to call. Use none only when no current external data is needed."
     },
     args: {
       type: "object",
@@ -32,7 +34,7 @@ const intentSchema = {
     },
     reply: {
       type: "string",
-      description: "Traditional Chinese direct reply when toolName is none; otherwise an empty string."
+      description: "Always return an empty string. The app will call Gemini again for final replies."
     }
   },
   required: ["toolName", "args", "reply"],
@@ -40,19 +42,31 @@ const intentSchema = {
 };
 
 export async function answerWithGemini({ text, location }) {
-  const localIntent = detectLocalIntent({ text, location });
   const userPrompt = buildUserPrompt({ text, location });
-  const intent = localIntent || await detectIntent(userPrompt);
-
-  if (intent.toolName === "none") {
-    return intent.reply || await generateText({
-      prompt: userPrompt,
+  if (!mayNeedRealtimeTool(text, location)) {
+    return generateText({
+      prompt: buildDirectAnswerPrompt(userPrompt),
       system: systemInstruction
     });
   }
 
-  const toolResult = await runTool(intent.toolName, sanitizeToolArgs(intent), { location });
-  return formatToolResult(intent.toolName, toolResult);
+  const intent = await detectIntent(userPrompt);
+
+  if (intent.toolName === "none") {
+    return generateText({
+      prompt: buildDirectAnswerPrompt(userPrompt),
+      system: systemInstruction
+    });
+  }
+
+  const toolArgs = sanitizeToolArgs(intent, text);
+  const toolResult = await runTool(intent.toolName, toolArgs, { location });
+  return summarizeToolResult({
+    userPrompt,
+    toolName: intent.toolName,
+    toolArgs,
+    toolResult
+  });
 }
 
 async function detectIntent(userPrompt) {
@@ -60,10 +74,11 @@ async function detectIntent(userPrompt) {
 Classify this LINE message and return JSON only.
 
 Rules:
-- Weather/rain/temperature/typhoon: toolName=get_weather, args.city should be a Taiwan city/county.
+- Current weather/rain/temperature/typhoon: toolName=get_weather, args.city should be a Taiwan city/county.
+- If the user asks about 淡水 weather, set args.city to 淡水區, not 臺北市.
 - Food/restaurants/cafes/ramen/what to eat/market food: toolName=search_food, args.query should keep the full search term, for example "西湖市場美食".
 - Stocks/stock price/Taiwan stocks/US stocks/2330/AAPL-like symbols: toolName=get_stock_quote. Use market=TW for numeric Taiwan symbols, market=US for US tickers.
-- General chat or "what can you do": toolName=none and reply in Traditional Chinese.
+- General chat, entertainment recommendations, writing, translation, planning, summarization, or "what can you do": toolName=none. Do not answer here; set reply to an empty string.
 
 User message:
 ${userPrompt}
@@ -84,6 +99,38 @@ ${userPrompt}
     args: parsed.args && typeof parsed.args === "object" ? parsed.args : {},
     reply: typeof parsed.reply === "string" ? parsed.reply.trim() : ""
   };
+}
+
+async function summarizeToolResult({ userPrompt, toolName, toolArgs, toolResult }) {
+  const prompt = `
+Reply to the LINE user in Traditional Chinese using the user message and tool result.
+
+Requirements:
+- Keep it mobile-friendly and concise.
+- If needsConfiguration is present, clearly name the missing Render Environment variable and say Render must be redeployed after setting it.
+- If providerError is present, explain the data source problem without exposing long raw JSON.
+- If ok=false, explain what was not found or what input is missing.
+- For food, list up to 5 places with name, rating, address, and Google Maps link when available.
+- For stocks, include the source caveat and say this is not investment advice.
+- Do not invent values that are not in the tool result.
+
+User message:
+${userPrompt}
+
+Tool:
+${toolName}
+
+Tool args:
+${JSON.stringify(toolArgs)}
+
+Tool result:
+${JSON.stringify(toolResult)}
+`.trim();
+
+  return generateText({
+    prompt,
+    system: systemInstruction
+  });
 }
 
 async function generateText({ prompt, system, generationConfig = {} }) {
@@ -126,176 +173,6 @@ async function generateText({ prompt, system, generationConfig = {} }) {
   return text;
 }
 
-function detectLocalIntent({ text, location }) {
-  const message = String(text || "").trim();
-  const upper = message.toUpperCase();
-
-  if (/你可以做什麼|你會什麼|功能|HELP|幫助/.test(upper)) {
-    return {
-      toolName: "none",
-      args: {},
-      reply: "我可以幫你查台灣天氣、美食餐廳、台股和美股。\n例如：\n台北明天天氣\n西湖市場美食\n2330 股價"
-    };
-  }
-
-  const stock = extractStock(message, upper);
-  if (stock) {
-    return {
-      toolName: "get_stock_quote",
-      args: stock,
-      reply: ""
-    };
-  }
-
-  if (/天氣|下雨|降雨|氣溫|溫度|颱風|天候/.test(message)) {
-    return {
-      toolName: "get_weather",
-      args: {
-        city: extractTaiwanCity(message) || "臺北市"
-      },
-      reply: ""
-    };
-  }
-
-  if (isFoodMessage(message, location)) {
-    return {
-      toolName: "search_food",
-      args: {
-        query: cleanFoodQuery(message),
-        openNow: /現在|營業|開著|open/i.test(message)
-      },
-      reply: ""
-    };
-  }
-
-  return null;
-}
-
-function formatToolResult(toolName, result) {
-  if (result?.needsConfiguration) {
-    return `此功能還缺 Render Environment 變數：${result.needsConfiguration}\n設定後請重新部署 Render。`;
-  }
-
-  if (result?.providerError) {
-    return `我已連到 AI，但 ${result.source} 資料源發生問題：\n${result.message}`;
-  }
-
-  if (toolName === "get_weather") return formatWeather(result);
-  if (toolName === "search_food") return formatFood(result);
-  if (toolName === "get_stock_quote") return formatStock(result);
-  return result?.message || "查詢完成，但我暫時無法整理結果。";
-}
-
-function formatWeather(result) {
-  if (!result?.ok) {
-    return result?.message || "查不到這個地區的天氣資訊，請換成縣市名稱再試一次。";
-  }
-
-  const rows = [];
-  for (const element of result.forecast || []) {
-    const first = element.periods?.[0];
-    if (!first) continue;
-    rows.push(`${weatherElementLabel(element.name)}：${first.value}${first.unit || ""}`);
-  }
-
-  return [
-    `${result.city} 天氣：`,
-    ...rows.slice(0, 5),
-    `來源：${result.source}`
-  ].filter(Boolean).join("\n");
-}
-
-function formatFood(result) {
-  if (!result?.ok) {
-    return result?.message || "找不到符合條件的餐廳。";
-  }
-
-  const lines = (result.places || []).slice(0, 5).map((place, index) => {
-    const rating = place.rating ? `，評分 ${place.rating}` : "";
-    const address = place.address ? `\n${place.address}` : "";
-    const map = place.mapsUrl ? `\n${place.mapsUrl}` : "";
-    return `${index + 1}. ${place.name}${rating}${address}${map}`;
-  });
-
-  return [
-    "找到幾個美食選項：",
-    ...lines
-  ].join("\n\n");
-}
-
-function formatStock(result) {
-  if (!result?.ok) {
-    return result?.message || "查不到這個股票代號。";
-  }
-
-  if (result.market === "TW") {
-    return [
-      `${result.symbol} ${result.name || ""}`.trim(),
-      `收盤價：${result.price}`,
-      `漲跌：${result.change}`,
-      result.note
-    ].filter(Boolean).join("\n");
-  }
-
-  return [
-    `${result.symbol} 美股報價`,
-    `目前：${result.currentPrice}`,
-    `漲跌：${result.change} (${result.percentChange}%)`,
-    result.note
-  ].filter(Boolean).join("\n");
-}
-
-function extractStock(message, upper) {
-  const hasStockWord = /股票|股價|台股|美股|報價/.test(message);
-  const twSymbol = message.match(/\b[0-9]{4,6}\b/);
-  if (twSymbol && hasStockWord) {
-    return { market: "TW", symbol: twSymbol[0] };
-  }
-
-  const usSymbol = upper.match(/\b[A-Z]{1,5}\b/);
-  if (usSymbol && hasStockWord) {
-    return { market: "US", symbol: usSymbol[0] };
-  }
-
-  return null;
-}
-
-function extractTaiwanCity(message) {
-  const cities = [
-    "台北市", "臺北市", "新北市", "桃園市", "台中市", "臺中市", "台南市", "臺南市",
-    "高雄市", "基隆市", "新竹市", "嘉義市", "新竹縣", "苗栗縣", "彰化縣", "南投縣",
-    "雲林縣", "嘉義縣", "屏東縣", "宜蘭縣", "花蓮縣", "台東縣", "臺東縣", "澎湖縣",
-    "金門縣", "連江縣", "台北", "臺北", "新北", "桃園", "台中", "臺中", "台南",
-    "臺南", "高雄", "基隆", "新竹", "嘉義", "苗栗", "彰化", "南投", "雲林",
-    "屏東", "宜蘭", "花蓮", "台東", "臺東", "澎湖", "金門", "連江"
-  ];
-  return cities.find((city) => message.includes(city)) || "";
-}
-
-function isFoodMessage(message, location) {
-  if (/美食|餐廳|吃什麼|小吃|市場|咖啡|拉麵|牛肉麵|火鍋|早餐|午餐|晚餐|宵夜|推薦.*吃/.test(message)) {
-    return true;
-  }
-  return Boolean(location && /附近|周邊|附近有什麼/.test(message));
-}
-
-function cleanFoodQuery(message) {
-  return String(message || "")
-    .replace(/幫我|請問|推薦|有哪些|有什麼|查一下|找一下/g, "")
-    .trim() || "餐廳";
-}
-
-function weatherElementLabel(name) {
-  const labels = {
-    Wx: "天氣",
-    PoP: "降雨機率",
-    MinT: "最低溫",
-    MaxT: "最高溫",
-    CI: "體感"
-  };
-  return labels[name] || name;
-}
-
 function buildUserPrompt({ text, location }) {
   const parts = [String(text || "").trim()];
   if (location) {
@@ -304,10 +181,31 @@ function buildUserPrompt({ text, location }) {
   return parts.filter(Boolean).join("\n");
 }
 
-function sanitizeToolArgs(intent) {
+function buildDirectAnswerPrompt(userPrompt) {
+  return `
+Answer this LINE user message directly in Traditional Chinese.
+
+Requirements:
+- Actually answer the request; do not only introduce your capabilities.
+- Keep it concise and useful for mobile chat.
+- If the user asks for recommendations, give concrete options.
+- If the user asks about current weather, restaurants, or stock prices, say you need the realtime tool instead of inventing data.
+
+User message:
+${userPrompt}
+`.trim();
+}
+
+function mayNeedRealtimeTool(text, location) {
+  const message = String(text || "");
+  if (location) return true;
+  return /天氣|下雨|降雨|氣溫|溫度|颱風|天候|美食|餐廳|吃什麼|小吃|市場|咖啡|拉麵|牛肉麵|火鍋|早餐|午餐|晚餐|宵夜|股票|股價|台股|美股|報價|\b[0-9]{4,6}\b|\b[A-Z]{1,5}\b/i.test(message);
+}
+
+function sanitizeToolArgs(intent, userText = "") {
   const args = intent.args || {};
   if (intent.toolName === "get_weather") {
-    return { city: String(args.city || "").trim() || "臺北市" };
+    return { city: extractWeatherLocationFromText(userText) || String(args.city || "").trim() || "臺北市" };
   }
   if (intent.toolName === "search_food") {
     return {
@@ -348,4 +246,29 @@ function parseJson(text) {
 
 function numberOrUndefined(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function extractWeatherLocationFromText(text) {
+  const message = String(text || "");
+  const overrides = [
+    [/淡水區|淡水/, "淡水區"],
+    [/八里區|八里/, "八里區"],
+    [/三芝區|三芝/, "三芝區"],
+    [/石門區|石門/, "石門區"],
+    [/金山區|金山/, "金山區"],
+    [/萬里區|萬里/, "萬里區"],
+    [/北投區|北投/, "北投區"],
+    [/士林區|士林/, "士林區"],
+    [/內湖區|內湖/, "內湖區"],
+    [/信義區|信義/, "信義區"],
+    [/板橋區|板橋/, "板橋區"],
+    [/新莊區|新莊/, "新莊區"],
+    [/中和區|中和/, "中和區"],
+    [/永和區|永和/, "永和區"],
+    [/三重區|三重/, "三重區"],
+    [/蘆洲區|蘆洲/, "蘆洲區"],
+    [/汐止區|汐止/, "汐止區"],
+    [/新店區|新店/, "新店區"]
+  ];
+  return overrides.find(([pattern]) => pattern.test(message))?.[1] || "";
 }

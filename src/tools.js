@@ -4,13 +4,13 @@ export const toolDefinitions = [
   {
     type: "function",
     name: "get_weather",
-    description: "查詢台灣縣市天氣預報，適合回答會不會下雨、氣溫、天氣概況。",
+    description: "查詢台灣縣市或鄉鎮市區天氣預報，適合回答會不會下雨、氣溫、天氣概況。",
     parameters: {
       type: "object",
       properties: {
         city: {
           type: "string",
-          description: "台灣縣市，例如臺北市、高雄市、臺中市"
+          description: "台灣縣市或鄉鎮市區，例如臺北市、新北市、淡水區、淡水"
         }
       },
       required: ["city"],
@@ -99,38 +99,23 @@ export async function runTool(name, args, context = {}) {
 }
 
 export async function getWeather({ city }) {
-  const normalizedCity = normalizeTaiwanCity(city);
+  const location = resolveWeatherLocation(city);
   if (!config.providers.cwaApiKey) {
     return {
       ok: false,
       needsConfiguration: "CWA_API_KEY",
-      message: `尚未設定中央氣象署 API key。設定後可查詢 ${normalizedCity} 的天氣預報。`
+      city: location.city,
+      locality: location.locality,
+      message: `尚未設定中央氣象署 API key。設定後可查詢 ${location.displayName} 的天氣預報。`
     };
   }
 
-  const url = new URL("https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001");
-  url.searchParams.set("Authorization", config.providers.cwaApiKey);
-  url.searchParams.set("locationName", normalizedCity);
+  if (location.locality) {
+    const township = await getTownshipWeather(location);
+    if (township.ok) return township;
+  }
 
-  const data = await fetchJson(url);
-  const location = data.records?.location?.[0];
-  const elements = location?.weatherElement || [];
-
-  return {
-    ok: Boolean(location),
-    source: "CWA F-C0032-001",
-    city: normalizedCity,
-    message: location ? "" : `查不到 ${normalizedCity} 的天氣資訊。`,
-    forecast: elements.map((element) => ({
-      name: element.elementName,
-      periods: (element.time || []).slice(0, 3).map((period) => ({
-        startTime: period.startTime,
-        endTime: period.endTime,
-        value: period.parameter?.parameterName,
-        unit: period.parameter?.parameterUnit || ""
-      }))
-    }))
-  };
+  return getCountyWeather(location);
 }
 
 export async function searchFood({ query, city, latitude, longitude, openNow = false }) {
@@ -174,6 +159,60 @@ export async function getStockQuote({ market, symbol }) {
   }
 
   return getUsStockQuote(cleanSymbol);
+}
+
+async function getTownshipWeather(location) {
+  const url = new URL("https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-D0047-089");
+  url.searchParams.set("Authorization", config.providers.cwaApiKey);
+  url.searchParams.set("locationName", location.locality);
+
+  const data = await fetchJson(url);
+  const township = findTownshipLocation(data, location.locality);
+  if (!township) {
+    return {
+      ok: false,
+      city: location.city,
+      locality: location.locality,
+      message: `查不到 ${location.locality} 的鄉鎮預報，將改查 ${location.city}。`
+    };
+  }
+
+  return {
+    ok: true,
+    source: "CWA F-D0047-089",
+    city: location.city,
+    locality: location.locality,
+    displayName: location.locality,
+    forecast: summarizeTownshipElements(township.WeatherElement || township.weatherElement || []),
+    note: "此為中央氣象署鄉鎮市區預報。"
+  };
+}
+
+async function getCountyWeather(location) {
+  const url = new URL("https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001");
+  url.searchParams.set("Authorization", config.providers.cwaApiKey);
+  url.searchParams.set("locationName", location.city);
+
+  const data = await fetchJson(url);
+  const county = data.records?.location?.[0];
+  const elements = county?.weatherElement || [];
+
+  return {
+    ok: Boolean(county),
+    source: "CWA F-C0032-001",
+    city: location.city,
+    displayName: location.displayName,
+    message: county ? "" : `查不到 ${location.displayName} 的天氣資訊。`,
+    forecast: elements.map((element) => ({
+      name: element.elementName,
+      periods: (element.time || []).slice(0, 3).map((period) => ({
+        startTime: period.startTime,
+        endTime: period.endTime,
+        value: period.parameter?.parameterName,
+        unit: period.parameter?.parameterUnit || ""
+      }))
+    }))
+  };
 }
 
 async function searchFoodByText({ textQuery, latitude, longitude, openNow, source }) {
@@ -270,6 +309,52 @@ async function getUsStockQuote(symbol) {
   };
 }
 
+function findTownshipLocation(data, locality) {
+  const groups = data.records?.Locations || data.records?.locations || [];
+  for (const group of groups) {
+    const locations = group.Location || group.location || [];
+    const found = locations.find((item) => {
+      const name = item.LocationName || item.locationName || item.locationName;
+      return name === locality;
+    });
+    if (found) return found;
+  }
+  return null;
+}
+
+function summarizeTownshipElements(elements) {
+  const wanted = new Set(["天氣現象", "降雨機率", "溫度", "體感溫度", "舒適度指數", "最高溫度", "最低溫度", "Wx", "PoP", "T", "AT", "CI", "MaxT", "MinT"]);
+  return elements
+    .filter((element) => wanted.has(element.ElementName || element.elementName))
+    .slice(0, 7)
+    .map((element) => ({
+      name: element.ElementName || element.elementName,
+      periods: (element.Time || element.time || []).slice(0, 3).map((period) => ({
+        startTime: period.StartTime || period.startTime,
+        endTime: period.EndTime || period.endTime,
+        value: extractElementValue(period.ElementValue || period.elementValue || period.parameter),
+        unit: extractElementUnit(period.ElementValue || period.elementValue || period.parameter)
+      }))
+    }));
+}
+
+function extractElementValue(value) {
+  if (!value) return "";
+  if (!Array.isArray(value)) {
+    return value.Value || value.value || value.ParameterName || value.parameterName || "";
+  }
+  return value
+    .map((item) => item.Value || item.value || item.Weather || item.WeatherDescription || item.Temperature || item.MaxTemperature || item.MinTemperature || item.ProbabilityOfPrecipitation || item.ComfortIndexDescription || "")
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function extractElementUnit(value) {
+  if (!value) return "";
+  if (!Array.isArray(value)) return value.Measures || value.measures || value.ParameterUnit || value.parameterUnit || "";
+  return value.map((item) => item.Measures || item.measures || "").filter(Boolean)[0] || "";
+}
+
 function normalizePlacesResponse(data, source) {
   const places = (data.places || []).slice(0, 5).map((place) => ({
     name: place.displayName?.text || "",
@@ -296,61 +381,40 @@ function locationFallback(args, location) {
   };
 }
 
+export function resolveWeatherLocation(input) {
+  const raw = String(input || "").trim();
+  const locality = normalizeTownship(raw);
+  if (locality) {
+    return {
+      city: townshipCountyMap.get(locality) || "新北市",
+      locality,
+      displayName: locality
+    };
+  }
+
+  const city = normalizeTaiwanCity(raw);
+  return {
+    city,
+    locality: "",
+    displayName: city
+  };
+}
+
 export function normalizeTaiwanCity(city) {
   const input = String(city || "").trim();
-  const aliases = new Map([
-    ["台北", "臺北市"],
-    ["台北市", "臺北市"],
-    ["臺北", "臺北市"],
-    ["臺北市", "臺北市"],
-    ["新北", "新北市"],
-    ["新北市", "新北市"],
-    ["桃園", "桃園市"],
-    ["桃園市", "桃園市"],
-    ["台中", "臺中市"],
-    ["台中市", "臺中市"],
-    ["臺中", "臺中市"],
-    ["臺中市", "臺中市"],
-    ["台南", "臺南市"],
-    ["台南市", "臺南市"],
-    ["臺南", "臺南市"],
-    ["臺南市", "臺南市"],
-    ["高雄", "高雄市"],
-    ["高雄市", "高雄市"],
-    ["基隆", "基隆市"],
-    ["基隆市", "基隆市"],
-    ["新竹", "新竹市"],
-    ["新竹市", "新竹市"],
-    ["嘉義", "嘉義市"],
-    ["嘉義市", "嘉義市"],
-    ["新竹縣", "新竹縣"],
-    ["苗栗", "苗栗縣"],
-    ["苗栗縣", "苗栗縣"],
-    ["彰化", "彰化縣"],
-    ["彰化縣", "彰化縣"],
-    ["南投", "南投縣"],
-    ["南投縣", "南投縣"],
-    ["雲林", "雲林縣"],
-    ["雲林縣", "雲林縣"],
-    ["嘉義縣", "嘉義縣"],
-    ["屏東", "屏東縣"],
-    ["屏東縣", "屏東縣"],
-    ["宜蘭", "宜蘭縣"],
-    ["宜蘭縣", "宜蘭縣"],
-    ["花蓮", "花蓮縣"],
-    ["花蓮縣", "花蓮縣"],
-    ["台東", "臺東縣"],
-    ["台東縣", "臺東縣"],
-    ["臺東", "臺東縣"],
-    ["臺東縣", "臺東縣"],
-    ["澎湖", "澎湖縣"],
-    ["澎湖縣", "澎湖縣"],
-    ["金門", "金門縣"],
-    ["金門縣", "金門縣"],
-    ["連江", "連江縣"],
-    ["連江縣", "連江縣"]
-  ]);
-  return aliases.get(input) || input;
+  return cityAliases.get(input) || input || "臺北市";
+}
+
+function normalizeTownship(input) {
+  if (!input) return "";
+  if (townshipCountyMap.has(input)) return input;
+  const withDistrict = `${input}區`;
+  if (townshipCountyMap.has(withDistrict)) return withDistrict;
+  const withTown = `${input}鎮`;
+  if (townshipCountyMap.has(withTown)) return withTown;
+  const withTownship = `${input}鄉`;
+  if (townshipCountyMap.has(withTownship)) return withTownship;
+  return "";
 }
 
 async function fetchJson(url) {
@@ -399,3 +463,101 @@ function inferToolSource(name) {
 function isFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
+
+const cityAliases = new Map([
+  ["台北", "臺北市"],
+  ["台北市", "臺北市"],
+  ["臺北", "臺北市"],
+  ["臺北市", "臺北市"],
+  ["新北", "新北市"],
+  ["新北市", "新北市"],
+  ["桃園", "桃園市"],
+  ["桃園市", "桃園市"],
+  ["台中", "臺中市"],
+  ["台中市", "臺中市"],
+  ["臺中", "臺中市"],
+  ["臺中市", "臺中市"],
+  ["台南", "臺南市"],
+  ["台南市", "臺南市"],
+  ["臺南", "臺南市"],
+  ["臺南市", "臺南市"],
+  ["高雄", "高雄市"],
+  ["高雄市", "高雄市"],
+  ["基隆", "基隆市"],
+  ["基隆市", "基隆市"],
+  ["新竹", "新竹市"],
+  ["新竹市", "新竹市"],
+  ["嘉義", "嘉義市"],
+  ["嘉義市", "嘉義市"],
+  ["新竹縣", "新竹縣"],
+  ["苗栗", "苗栗縣"],
+  ["苗栗縣", "苗栗縣"],
+  ["彰化", "彰化縣"],
+  ["彰化縣", "彰化縣"],
+  ["南投", "南投縣"],
+  ["南投縣", "南投縣"],
+  ["雲林", "雲林縣"],
+  ["雲林縣", "雲林縣"],
+  ["嘉義縣", "嘉義縣"],
+  ["屏東", "屏東縣"],
+  ["屏東縣", "屏東縣"],
+  ["宜蘭", "宜蘭縣"],
+  ["宜蘭縣", "宜蘭縣"],
+  ["花蓮", "花蓮縣"],
+  ["花蓮縣", "花蓮縣"],
+  ["台東", "臺東縣"],
+  ["台東縣", "臺東縣"],
+  ["臺東", "臺東縣"],
+  ["臺東縣", "臺東縣"],
+  ["澎湖", "澎湖縣"],
+  ["澎湖縣", "澎湖縣"],
+  ["金門", "金門縣"],
+  ["金門縣", "金門縣"],
+  ["連江", "連江縣"],
+  ["連江縣", "連江縣"]
+]);
+
+const townshipCountyMap = new Map([
+  ["淡水區", "新北市"],
+  ["八里區", "新北市"],
+  ["三芝區", "新北市"],
+  ["石門區", "新北市"],
+  ["金山區", "新北市"],
+  ["萬里區", "新北市"],
+  ["板橋區", "新北市"],
+  ["新莊區", "新北市"],
+  ["中和區", "新北市"],
+  ["永和區", "新北市"],
+  ["三重區", "新北市"],
+  ["蘆洲區", "新北市"],
+  ["汐止區", "新北市"],
+  ["新店區", "新北市"],
+  ["土城區", "新北市"],
+  ["樹林區", "新北市"],
+  ["鶯歌區", "新北市"],
+  ["三峽區", "新北市"],
+  ["瑞芳區", "新北市"],
+  ["林口區", "新北市"],
+  ["五股區", "新北市"],
+  ["泰山區", "新北市"],
+  ["深坑區", "新北市"],
+  ["石碇區", "新北市"],
+  ["坪林區", "新北市"],
+  ["三峽區", "新北市"],
+  ["平溪區", "新北市"],
+  ["雙溪區", "新北市"],
+  ["貢寮區", "新北市"],
+  ["烏來區", "新北市"],
+  ["士林區", "臺北市"],
+  ["北投區", "臺北市"],
+  ["內湖區", "臺北市"],
+  ["信義區", "臺北市"],
+  ["中山區", "臺北市"],
+  ["大安區", "臺北市"],
+  ["松山區", "臺北市"],
+  ["中正區", "臺北市"],
+  ["萬華區", "臺北市"],
+  ["文山區", "臺北市"],
+  ["大同區", "臺北市"],
+  ["南港區", "臺北市"]
+]);

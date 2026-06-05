@@ -1,10 +1,10 @@
 # LINE AI Assistant
 
-LINE 官方帳號 AI 機器人範本。Render 上的 Node.js webhook 接收 LINE Messaging API 事件，透過 AI provider 判斷使用者需求，再呼叫天氣、美食或股票工具回覆。
+LINE 官方帳號 AI 機器人範本。Render 上的 Node.js webhook 接收 LINE Messaging API 事件，全部先交給 Gemini 判斷與回覆；當 Gemini 判斷需要即時資料時，再呼叫天氣、美食或股票工具。
 
 目前支援：
 
-- AI provider：Gemini Free Tier，或 OpenAI Responses API
+- Gemini 一般問答：聊天、文案、翻譯、摘要、規劃、知識問答
 - 天氣：中央氣象署 Open Data
 - 台股：TWSE OpenAPI
 - 美股：Finnhub
@@ -20,7 +20,7 @@ LINE 官方帳號 AI 機器人範本。Render 上的 Node.js webhook 接收 LINE
 Copy-Item .env.example .env
 ```
 
-編輯 `.env`，測試 Gemini 免費方案至少需要：
+編輯 `.env`，Gemini 模式至少需要：
 
 ```env
 AI_PROVIDER=gemini
@@ -50,7 +50,7 @@ Invoke-WebRequest -UseBasicParsing http://localhost:3000/health
 模擬 LINE 訊息：
 
 ```powershell
-$body = @{ text = "幫我查明天台北市的天氣" } | ConvertTo-Json
+$body = @{ text = "幫我寫一段咖啡店開幕文案" } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri "http://localhost:3000/simulate" -ContentType "application/json; charset=utf-8" -Body $body
 ```
 
@@ -62,7 +62,7 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:3000/simulate" -ContentTyp
 line-ai-assistant → Environment → Add Environment Variable
 ```
 
-Gemini 免費方案需要：
+必要設定：
 
 ```text
 AI_PROVIDER=gemini
@@ -74,15 +74,10 @@ ALLOW_UNSIGNED_WEBHOOKS=false
 ENABLE_SIMULATE_ROUTE=false
 ```
 
-天氣功能需要：
+即時資料功能可再補：
 
 ```text
 CWA_API_KEY=你的_中央氣象署_API_Key
-```
-
-其他功能可再補：
-
-```text
 GOOGLE_PLACES_API_KEY=你的_Google_Places_Key
 FINNHUB_API_KEY=你的_Finnhub_Key
 ```
@@ -92,8 +87,6 @@ FINNHUB_API_KEY=你的_Finnhub_Key
 ```text
 Manual Deploy → Deploy latest commit
 ```
-
-如果改了 key 但沒有重新部署，正在跑的 Render container 仍會讀到舊環境變數。
 
 ## 3. Render Build 設定
 
@@ -148,16 +141,16 @@ AI 自動回應訊息：關閉
 Webhook：開啟
 ```
 
-歡迎訊息可以保留。
-
 ## 5. 常用測試句
 
 ```text
+你可以做什麼？
+幫我寫一段咖啡店開幕文案
+幫我翻譯這句話成英文：今天很適合喝咖啡
 幫我查明天台北市的天氣
+西湖市場推薦美食有哪些
 2330 股價
 AAPL 股價
-你可以做什麼？
-附近牛肉麵
 ```
 
 ## 6. 驗證
@@ -176,7 +169,6 @@ node --test
 
 ## 7. 注意事項
 
-- Render Free 方案閒置會休眠，第一則 LINE 訊息可能延遲或 timeout。
-- Gemini Free Tier 可用量與模型支援會依 Google 規則調整；免費層資料可能被用於改善產品。
-- Google Places 通常需要 Google Cloud billing；初期可先測天氣與股票。
+- 所有問題都會先交給 Gemini，因此 Gemini 免費額度比較容易遇到 429；等約 1 分鐘通常會恢復。
+- Google Places 通常需要 Google Cloud billing，且要啟用 Places API (New)。
 - `.env.example` 只能放 placeholder，不要放真實 API key。

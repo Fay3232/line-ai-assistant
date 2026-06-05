@@ -13,7 +13,7 @@ import {
 if (isMainModule()) {
   const server = createServer();
   server.listen(config.port, () => {
-    console.log(`LINE AI assistant listening on http://localhost:${config.port}`);
+    console.log(`LINE AI assistant ${config.appVersion} listening on http://localhost:${config.port}`);
   });
 }
 
@@ -24,7 +24,11 @@ export function createServer() {
 export async function routeRequest(req, res) {
   try {
     if (req.method === "GET" && req.url === "/health") {
-      return sendJson(res, 200, { ok: true });
+      return sendJson(res, 200, {
+        ok: true,
+        version: config.appVersion,
+        aiProvider: config.aiProvider
+      });
     }
 
     if (req.method === "POST" && req.url === "/webhook/line") {

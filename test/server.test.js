@@ -10,7 +10,10 @@ test("GET /health returns ok", async () => {
   try {
     const response = await fetch(server.url("/health"));
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { ok: true });
+    const body = await response.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.version, "gemini-direct-answer-tamsui-weather-2026-06-05");
+    assert.equal(body.aiProvider, "gemini");
   } finally {
     await close(server.instance);
   }
